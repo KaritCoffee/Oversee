@@ -4,10 +4,10 @@ Oregon-first public camera monitor prototype.
 
 ## What is in this repo
 
-- A no-dependency dashboard prototype in [index.html](C:\Users\perri\Desktop\Projects\Oversee\index.html)
-- Seeded Oregon source and feed catalog in [data.js](C:\Users\perri\Desktop\Projects\Oversee\assets\data.js)
-- Pacific Northwest operations-room styling in [styles.css](C:\Users\perri\Desktop\Projects\Oversee\assets\styles.css)
-- Product and research plan in [oregon-public-camera-dashboard-plan.md](C:\Users\perri\Desktop\Projects\Oversee\docs\oregon-public-camera-dashboard-plan.md)
+- A no-dependency dashboard prototype in [index.html](./index.html)
+- Seeded Oregon source and feed catalog in [data.js](./assets/data.js)
+- Pacific Northwest operations-room styling in [styles.css](./assets/styles.css)
+- Product and research plan in [oregon-public-camera-dashboard-plan.md](./docs/oregon-public-camera-dashboard-plan.md)
 
 ## Current status
 
@@ -41,7 +41,7 @@ Optional:
 - If `4173` is occupied, the server automatically falls back to `4183`, `4193`, `4203`, then `4303`.
 - Set `PORT` before starting if you want a specific port.
 - Set `OPENSKY_TOKEN` if you want the flight layer to use an authenticated OpenSky bearer token when available.
-- You can also double-click [run-oversee.bat](C:\Users\perri\Desktop\Projects\Oversee\run-oversee.bat) to launch it from Explorer. It will keep a console window open and print the active URL.
+- You can also double-click [run-oversee.bat](./run-oversee.bat) to launch it from Explorer. It will keep a console window open and print the active URL.
 
 ## Recommended next build step
 
