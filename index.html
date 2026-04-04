@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Oversee | Oregon Public Camera Monitor</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link rel="stylesheet" href="./assets/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark">OV</div>
+          <div>
+            <p class="eyebrow">Oregon Public Monitor</p>
+            <h1>Oversee</h1>
+          </div>
+        </div>
+
+        <div class="topbar-actions">
+          <label class="search-field">
+            <span>Search feeds, towns, or sources</span>
+            <input
+              id="searchInput"
+              type="search"
+              placeholder="Portland, Newport, wildfire, Salem..."
+            />
+          </label>
+
+          <div class="view-switch" role="tablist" aria-label="Dashboard modes">
+            <button class="chip chip-active">Statewide</button>
+            <button class="chip">Area</button>
+            <button class="chip">Everything</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <aside class="sidebar">
+          <section class="panel panel-glow panel-sticky">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Scope</p>
+                <h2>Filter Network</h2>
+              </div>
+              <button id="resetFilters" class="ghost-button" type="button">Reset</button>
+            </div>
+
+            <div class="filter-group">
+              <span class="filter-label">Regions</span>
+              <div class="chip-row" id="regionFilters"></div>
+            </div>
+
+            <div class="filter-group">
+              <span class="filter-label">Categories</span>
+              <div class="chip-row" id="categoryFilters"></div>
+            </div>
+
+            <div class="filter-group">
+              <span class="filter-label">Media</span>
+              <div class="chip-row" id="mediaFilters"></div>
+            </div>
+
+            <div class="filter-group">
+              <span class="filter-label">Controls</span>
+              <label class="toggle">
+                <input id="cityOnlyToggle" type="checkbox" />
+                <span>Show city and town cameras only</span>
+              </label>
+            </div>
+
+            <div class="filter-group">
+              <label class="filter-label" for="sortSelect">Sort feeds</label>
+              <select id="sortSelect" class="select">
+                <option value="priority">Priority</option>
+                <option value="area">Area</option>
+                <option value="source">Source</option>
+                <option value="freshness">Freshness</option>
+              </select>
+            </div>
+
+            <p class="filter-state" id="filterStateLabel"></p>
+          </section>
+        </aside>
+
+        <section class="content">
+          <section class="hero panel panel-hero">
+            <div class="hero-copy">
+              <p class="eyebrow">Authorized Public Oregon Sources</p>
+              <h2>Oregon public cameras, cleaned up and easier to scan.</h2>
+              <p class="hero-text">
+                Oregon-first, source-governed, and organized around real coverage. The catalog now calls out
+                stronger Eugene coverage, explicit Toledo-area corridor cameras, and a clearer split between
+                network totals and your current filtered result set.
+              </p>
+            </div>
+
+            <div class="hero-grid" id="metricGrid"></div>
+          </section>
+
+          <section class="briefing-grid">
+            <section class="panel">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Coverage Updates</p>
+                  <h2>Eugene And Toledo</h2>
+                </div>
+                <p class="section-meta">Newest verified findings</p>
+              </div>
+              <div class="coverage-grid" id="coverageGrid"></div>
+            </section>
+
+            <section class="panel">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Build Notes</p>
+                  <h2>What Changed</h2>
+                </div>
+                <p class="section-meta">Cleaner and denser</p>
+              </div>
+              <ul class="notes-list" id="notesList"></ul>
+            </section>
+          </section>
+
+          <section class="panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Connected Now</p>
+                <h2>Live Source Adapters</h2>
+              </div>
+              <p class="section-meta" id="liveMeta">Loading live source snapshot...</p>
+            </div>
+            <div class="live-grid" id="liveGrid"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Live Cameras</p>
+                <h2>Always-On Camera Board</h2>
+              </div>
+              <p class="section-meta" id="liveBoardMeta">Loading direct camera views...</p>
+            </div>
+            <div class="live-board-grid" id="liveBoardGrid"></div>
+          </section>
+
+          <section class="panel ops-panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Operations Theater</p>
+                <h2>Worldview Lab</h2>
+              </div>
+              <p class="section-meta" id="opsMeta">Loading official situational layers...</p>
+            </div>
+
+            <div class="ops-toolbar">
+              <div class="ops-toolbar-group">
+                <span class="filter-label">Scope</span>
+                <div class="chip-row" id="opsScopeChips"></div>
+              </div>
+
+              <div class="ops-toolbar-group">
+                <span class="filter-label">Layers</span>
+                <div class="chip-row" id="opsLayerChips"></div>
+              </div>
+            </div>
+
+            <div class="ops-layout">
+              <section class="ops-map-shell">
+                <div id="opsMap" class="ops-map" aria-label="Operations map with public situational layers"></div>
+              </section>
+
+              <aside class="ops-rail">
+                <section class="ops-rail-block">
+                  <div class="section-header section-header-compact">
+                    <div>
+                      <p class="eyebrow">Snapshot</p>
+                      <h3>Layer Health</h3>
+                    </div>
+                    <p class="section-meta" id="opsStatus">Initializing feeds...</p>
+                  </div>
+                  <div class="ops-metric-grid" id="opsMetricGrid"></div>
+                </section>
+
+                <section class="ops-rail-block">
+                  <div class="section-header section-header-compact">
+                    <div>
+                      <p class="eyebrow">Briefing</p>
+                      <h3>Latest Signals</h3>
+                    </div>
+                    <p class="section-meta">Public feeds only</p>
+                  </div>
+                  <div class="ops-timeline" id="opsTimeline"></div>
+                </section>
+
+                <section class="ops-rail-block">
+                  <div class="section-header section-header-compact">
+                    <div>
+                      <p class="eyebrow">Legend</p>
+                      <h3>What You Are Seeing</h3>
+                    </div>
+                    <p class="section-meta">Official and source-governed</p>
+                  </div>
+                  <div class="ops-legend" id="opsLegend"></div>
+                </section>
+              </aside>
+            </div>
+          </section>
+
+          <section class="map-watch-grid">
+            <section class="panel map-panel">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Map View</p>
+                  <h2>Camera Map</h2>
+                </div>
+                <p class="section-meta" id="mapMeta">Loading map coverage...</p>
+              </div>
+              <div id="cameraMap" class="camera-map" aria-label="Map of public Oregon cameras"></div>
+            </section>
+
+            <section class="panel viewer-panel">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Watch In Dashboard</p>
+                  <h2 id="selectedFeedTitle">Select a camera</h2>
+                </div>
+                <div class="viewer-actions" id="selectedFeedActions"></div>
+              </div>
+
+              <p class="viewer-meta" id="selectedFeedMetaLine">Choose any camera from the map or feed list.</p>
+              <div id="selectedFeedTags" class="tag-row"></div>
+              <div id="selectedFeedViewer" class="selected-feed-viewer"></div>
+              <p class="viewer-summary" id="selectedFeedSummary"></p>
+            </section>
+          </section>
+
+          <section class="signal-band panel">
+            <div class="panel-heading">
+              <p class="eyebrow">Recommended Stack</p>
+              <h2>Watchboard</h2>
+            </div>
+            <div id="watchboard" class="watchboard"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Feed Catalog</p>
+                <h2>Camera Coverage</h2>
+              </div>
+              <p class="section-meta" id="feedCountLabel"></p>
+            </div>
+            <div class="feed-grid" id="feedGrid"></div>
+          </section>
+
+          <section class="two-up">
+            <section class="panel">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Adapters</p>
+                  <h2>Source Registry</h2>
+                </div>
+                <p class="section-meta">Verified first, expand carefully</p>
+              </div>
+              <div class="source-grid" id="sourceGrid"></div>
+            </section>
+
+            <section class="panel">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Beyond Cameras</p>
+                  <h2>Public Data Layers</h2>
+                </div>
+                <p class="section-meta">What else operators should see</p>
+              </div>
+              <div class="layer-grid" id="layerGrid"></div>
+            </section>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <script src="./assets/data.js"></script>
+    <script src="./assets/feed-meta.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+    <script src="./assets/app.js"></script>
+  </body>
+</html>
