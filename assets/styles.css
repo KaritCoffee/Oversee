@@ -556,6 +556,23 @@ a {
   margin-top: 10px;
 }
 
+.selection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selection-actions .text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.selection-actions svg {
+  width: 14px;
+  height: 14px;
+}
+
 .right-rail {
   display: grid;
   gap: 8px;
@@ -610,6 +627,63 @@ a {
 .source-grid {
   display: grid;
   gap: 8px;
+}
+
+.pinned-shelf {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(24, 240, 160, 0.24);
+  border-radius: 10px;
+  background: rgba(24, 240, 160, 0.055);
+}
+
+.pinned-head,
+.pinned-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pinned-head {
+  color: var(--green);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.pinned-row button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.pinned-row button:first-child {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 0;
+  text-align: left;
+}
+
+.pinned-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pin-remove {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
 }
 
 .event-card,
@@ -1039,6 +1113,58 @@ a {
   margin: 0 0 12px;
   color: #b8c8d5;
   line-height: 1.45;
+}
+
+.asset-watch {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  gap: 14px;
+  align-content: center;
+  min-height: 360px;
+  padding: 20px;
+  border: 1px solid rgba(115, 168, 201, 0.28);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 20% 15%, rgba(25, 226, 255, 0.14), transparent 36%),
+    linear-gradient(145deg, rgba(4, 18, 30, 0.96), rgba(1, 7, 12, 0.98));
+}
+
+.asset-watch-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid rgba(115, 168, 201, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.asset-watch-icon svg {
+  width: 30px;
+  height: 30px;
+}
+
+.asset-watch h3 {
+  margin: 10px 0 8px;
+  font-family: var(--display);
+  font-size: clamp(20px, 3vw, 32px);
+}
+
+.asset-watch .media-badge {
+  position: static;
+  display: inline-flex;
+  width: fit-content;
+}
+
+.asset-watch p {
+  margin: 6px 0;
+  color: var(--muted);
+}
+
+.asset-watch .text-button {
+  grid-column: 2;
+  justify-self: start;
+  margin-top: 8px;
 }
 
 .watch-detail {

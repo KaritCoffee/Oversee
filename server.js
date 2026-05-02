@@ -54,6 +54,79 @@ const GIBS_TEXTURES = {
   },
 };
 
+const CURATED_PUBLIC_CAMERAS = [
+  {
+    id: "de-kaiserslautern-japanese-garden-1",
+    name: "Kaiserslautern Japanese Garden 1",
+    area: "Kaiserslautern",
+    region: "Rhineland-Palatinate",
+    county: "Kaiserslautern",
+    country: "Germany",
+    category: "city",
+    sourceName: "City of Kaiserslautern Webcams",
+    officialUrl: "https://www.kaiserslautern.de/service/webcam/",
+    imageUrl: "https://www.japanischergarten.de/webcam/cam1/kamera1.jpg",
+    lat: 49.4431,
+    lng: 7.7689,
+  },
+  {
+    id: "de-kaiserslautern-japanese-garden-2",
+    name: "Kaiserslautern Japanese Garden 2",
+    area: "Kaiserslautern",
+    region: "Rhineland-Palatinate",
+    county: "Kaiserslautern",
+    country: "Germany",
+    category: "city",
+    sourceName: "City of Kaiserslautern Webcams",
+    officialUrl: "https://www.kaiserslautern.de/service/webcam/",
+    imageUrl: "https://www.japanischergarten.de/webcam/cam2/kamera2.jpg",
+    lat: 49.4431,
+    lng: 7.7689,
+  },
+  {
+    id: "de-kaiserslautern-japanese-garden-3",
+    name: "Kaiserslautern Japanese Garden 3",
+    area: "Kaiserslautern",
+    region: "Rhineland-Palatinate",
+    county: "Kaiserslautern",
+    country: "Germany",
+    category: "city",
+    sourceName: "City of Kaiserslautern Webcams",
+    officialUrl: "https://www.kaiserslautern.de/service/webcam/",
+    imageUrl: "https://www.japanischergarten.de/webcam/cam3/kamera3.jpg",
+    lat: 49.4431,
+    lng: 7.7689,
+  },
+  {
+    id: "de-kaiserslautern-japanese-garden-4",
+    name: "Kaiserslautern Japanese Garden 4",
+    area: "Kaiserslautern",
+    region: "Rhineland-Palatinate",
+    county: "Kaiserslautern",
+    country: "Germany",
+    category: "city",
+    sourceName: "City of Kaiserslautern Webcams",
+    officialUrl: "https://www.kaiserslautern.de/service/webcam/",
+    imageUrl: "https://www.japanischergarten.de/webcam/cam4/kamera4.jpg",
+    lat: 49.4431,
+    lng: 7.7689,
+  },
+  {
+    id: "de-berlin-red-town-hall",
+    name: "Berlin Red Town Hall",
+    area: "Berlin",
+    region: "Berlin",
+    county: "Berlin",
+    country: "Germany",
+    category: "city",
+    sourceName: "Berlin.de Webcams",
+    officialUrl: "https://www.berlin.de/en/webcams/",
+    imageUrl: "https://www.berlin.de/webcams/rathaus/webcam.jpg",
+    lat: 52.5186,
+    lng: 13.4083,
+  },
+];
+
 const SCOPE_BOUNDS = {
   world: { label: "Global", lamin: -70, lamax: 82, lomin: -180, lomax: 180, limit: 1800, flightLimit: 5000, satelliteLimit: 5000, quakeLimit: 2000 },
   us: { label: "United States", lamin: 18.0, lamax: 72.5, lomin: -170.0, lomax: -52.0, limit: 1400, flightLimit: 2200, satelliteLimit: 2500, quakeLimit: 1500 },
@@ -484,7 +557,39 @@ async function buildLocalCameras() {
       };
     })
   );
-  return cameras.filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng));
+  return [...cameras, ...CURATED_PUBLIC_CAMERAS.map(mapCuratedCamera)]
+    .filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng));
+}
+
+function mapCuratedCamera(camera) {
+  return {
+    id: camera.id,
+    type: "camera",
+    name: camera.name,
+    shortName: shortCameraName(camera.name),
+    area: camera.area,
+    region: camera.region,
+    county: camera.county,
+    country: camera.country,
+    category: camera.category || "city",
+    media: "still",
+    status: "Online",
+    freshness: 2,
+    tags: [camera.country, camera.region, camera.area, camera.category, "public webcam"].filter(Boolean),
+    sourceId: `curated-${slugify(camera.sourceName)}`,
+    sourceName: camera.sourceName,
+    sourceUrl: camera.officialUrl,
+    officialUrl: camera.officialUrl,
+    sourcePageUrl: camera.officialUrl,
+    lat: Number(camera.lat),
+    lng: Number(camera.lng),
+    viewerType: "image",
+    capability: "snapshot",
+    capabilityLabel: "Current Still",
+    previewUrl: camera.imageUrl,
+    imageUrl: camera.imageUrl,
+    refreshSeconds: 120,
+  };
 }
 
 function cameraAdapterSpecs(scope) {
@@ -1764,6 +1869,7 @@ async function fetchFlights(scope) {
       const callsign = String(stateVector[1] || "").trim() || stateVector[0];
       return {
         id: `flight-${stateVector[0]}`,
+        icao24: stateVector[0],
         type: "flight",
         name: callsign,
         callsign,

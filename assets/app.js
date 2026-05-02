@@ -123,6 +123,8 @@
     cameraRenderer: null,
     hls: null,
     stillRefreshTimer: null,
+    trackHistory: new Map(),
+    pinnedAssets: loadPinnedAssets(),
   };
 
   const globe = {
@@ -298,6 +300,21 @@
         if (item) selectObject(action.dataset.selectType, item, { focus: action.dataset.focus === "true" });
       }
 
+      const pinAction = event.target.closest("[data-pin-asset]");
+      if (pinAction) {
+        event.preventDefault();
+        event.stopPropagation();
+        const item = findItem(pinAction.dataset.pinType, pinAction.dataset.pinId);
+        if (item) togglePinnedAsset(pinAction.dataset.pinType, item);
+      }
+
+      const unpinAction = event.target.closest("[data-unpin-asset]");
+      if (unpinAction) {
+        event.preventDefault();
+        event.stopPropagation();
+        removePinnedAsset(unpinAction.dataset.unpinKey);
+      }
+
       const openUrl = event.target.closest("[data-open-url]");
       if (openUrl) {
         window.open(openUrl.dataset.openUrl, "_blank", "noopener,noreferrer");
@@ -447,6 +464,7 @@
       const response = await fetch(`/api/intel-snapshot?scope=${encodeURIComponent(state.scope)}&ts=${Date.now()}`);
       if (!response.ok) throw new Error(`Snapshot failed with status ${response.status}`);
       state.snapshot = await response.json();
+      updateTrackHistory(state.snapshot);
       updateSystemStatusAge({ force: true });
       renderAll();
 
@@ -476,6 +494,35 @@
     renderGlobeLayers();
     els.theaterSubtitle.textContent = subtitleForScope();
     if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function updateTrackHistory(snapshot) {
+    const now = Date.now();
+    for (const flight of snapshot?.flights || []) appendTrackPoint("flight", flight, now, 8);
+    for (const satellite of snapshot?.satellites || []) appendTrackPoint("satellite", satellite, now, 10);
+    for (const [key, points] of state.trackHistory) {
+      const newest = points.at(-1)?.seenAt || 0;
+      if (now - newest > 30 * 60 * 1000) state.trackHistory.delete(key);
+    }
+  }
+
+  function appendTrackPoint(type, item, seenAt, maxPoints) {
+    const lat = Number(item.lat);
+    const lng = Number(item.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const key = pinKey(type, item.id);
+    const points = state.trackHistory.get(key) || [];
+    const previous = points.at(-1);
+    if (!previous || distanceKm(previous.lat, previous.lng, lat, lng) > 0.5) {
+      points.push({ lat, lng, seenAt });
+    } else {
+      previous.seenAt = seenAt;
+    }
+    state.trackHistory.set(key, points.slice(-maxPoints));
+  }
+
+  function getTrackPoints(type, item) {
+    return state.trackHistory.get(pinKey(type, item.id)) || [];
   }
 
   function subtitleForScope() {
@@ -594,12 +641,13 @@
 
   function renderAssets(showAll = false) {
     const assets = getFilteredAssets().slice(0, showAll ? 24 : state.assetLimit);
+    const pinned = getPinnedAssets();
     if (!assets.length) {
-      els.assetList.innerHTML = `<div class="empty-state">No matching assets.</div>`;
+      els.assetList.innerHTML = `${renderPinnedShelf(pinned)}<div class="empty-state">No matching assets.</div>`;
       return;
     }
 
-    els.assetList.innerHTML = assets
+    els.assetList.innerHTML = renderPinnedShelf(pinned) + assets
       .map(({ type, item }) => {
         const color = colorForType(type);
         return `<button class="asset-row" type="button" data-select-type="${type}" data-select-id="${item.id}">
@@ -609,6 +657,25 @@
         </button>`;
       })
       .join("");
+  }
+
+  function renderPinnedShelf(pinned) {
+    if (!pinned.length) return "";
+    return `<div class="pinned-shelf">
+      <div class="pinned-head"><span>Pinned</span><small>${pinned.length}</small></div>
+      ${pinned
+        .map(({ type, item, key }) => {
+          const color = colorForType(type);
+          return `<div class="pinned-row">
+            <button type="button" data-select-type="${type}" data-select-id="${item.id}" data-focus="true">
+              <i data-lucide="${iconForType(type)}" style="color:${color}"></i>
+              <span>${escapeHtml(item.name || item.callsign || item.title || item.id)}</span>
+            </button>
+            <button class="pin-remove" type="button" title="Unpin" data-unpin-asset="${escapeHtml(key)}"><i data-lucide="x"></i></button>
+          </div>`;
+        })
+        .join("")}
+    </div>`;
   }
 
   function renderTimeline() {
@@ -621,6 +688,58 @@
         </button>`
       )
       .join("");
+  }
+
+  function pinKey(type, id) {
+    return `${type}:${id}`;
+  }
+
+  function isPinned(type, id) {
+    return state.pinnedAssets.some((asset) => asset.type === type && asset.id === id);
+  }
+
+  function togglePinnedAsset(type, item) {
+    const key = pinKey(type, item.id);
+    if (isPinned(type, item.id)) {
+      state.pinnedAssets = state.pinnedAssets.filter((asset) => pinKey(asset.type, asset.id) !== key);
+    } else {
+      state.pinnedAssets = [{ type, id: item.id }, ...state.pinnedAssets].slice(0, 12);
+    }
+    savePinnedAssets();
+    renderAssets();
+    renderSelectionCard(type, item);
+    renderWatch(type, item, { loading: type === "camera" && !state.feedView });
+    if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function removePinnedAsset(key) {
+    state.pinnedAssets = state.pinnedAssets.filter((asset) => pinKey(asset.type, asset.id) !== key);
+    savePinnedAssets();
+    renderAssets();
+    if (state.selection?.item) renderSelectionCard(state.selection.type, state.selection.item);
+    if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function getPinnedAssets() {
+    return state.pinnedAssets
+      .map((asset) => {
+        const item = findItem(asset.type, asset.id);
+        return item ? { ...asset, item, key: pinKey(asset.type, asset.id) } : null;
+      })
+      .filter(Boolean);
+  }
+
+  function loadPinnedAssets() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem("oversee:pinned-assets") || "[]");
+      return Array.isArray(parsed) ? parsed.filter((asset) => asset?.type && asset?.id).slice(0, 12) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function savePinnedAssets() {
+    localStorage.setItem("oversee:pinned-assets", JSON.stringify(state.pinnedAssets));
   }
 
   function renderCatalog() {
@@ -892,8 +1011,9 @@
       if (type === "satellite" && item.orbit && item.orbit.length && group.children.length < 240) {
         group.add(makePathLine(item.orbit.slice(0, 14), color, 2.18, 0.28));
       }
-      if (type === "flight" && Number.isFinite(Number(item.heading)) && group.children.length < 520) {
-        group.add(makeFlightTrail(item, color, 2.075));
+      if (type === "flight" && group.children.length < 520) {
+        const trackTrail = makeTrackTrail("flight", item, color, 2.075, { opacity: 0.34 });
+        group.add(trackTrail || makeFlightTrail(item, color, 2.075));
       }
     }
   }
@@ -910,6 +1030,12 @@
     const distanceKm = (speed * 60 * minutes) / 1000;
     const start = destinationPoint(Number(item.lat), Number(item.lng), Number(item.heading) + 180, distanceKm);
     return makePathLine([start, { lat: item.lat, lng: item.lng }], color, radius, options.opacity ?? 0.34);
+  }
+
+  function makeTrackTrail(type, item, color, radius, options = {}) {
+    const points = getTrackPoints(type, item);
+    if (points.length < 2) return null;
+    return makePathLine(points, color, radius, options.opacity ?? 0.54);
   }
 
   function renderSelectedGlobeFocus(type = state.selection?.type, item = state.selection?.item) {
@@ -941,15 +1067,26 @@
     }
 
     if (type === "flight" && Number.isFinite(Number(item.heading))) {
-      const trail = makeFlightTrail(item, "#ffffff", 2.11, { minutes: 18, opacity: 0.72 });
-      const glow = makeFlightTrail(item, COLORS.flights, 2.105, { minutes: 18, opacity: 0.92 });
+      const trail = makeTrackTrail("flight", item, "#ffffff", 2.11, { opacity: 0.72 }) || makeFlightTrail(item, "#ffffff", 2.11, { minutes: 18, opacity: 0.72 });
+      const glow = makeTrackTrail("flight", item, COLORS.flights, 2.105, { opacity: 0.92 }) || makeFlightTrail(item, COLORS.flights, 2.105, { minutes: 18, opacity: 0.92 });
       globe.selectionGroup.add(trail);
       globe.selectionGroup.add(glow);
-      const origin = destinationPoint(lat, lng, Number(item.heading) + 180, clamp(Number(item.velocity || 180), 120, 280) * 60 * 18 / 1000);
+      const historical = getTrackPoints("flight", item);
+      const origin = historical[0] || destinationPoint(lat, lng, Number(item.heading) + 180, clamp(Number(item.velocity || 180), 120, 280) * 60 * 18 / 1000);
       const originSprite = makeSprite("#ffffff", 0.08);
       originSprite.position.copy(latLngToVector3(origin.lat, origin.lng, 2.13));
       globe.selectionGroup.add(originSprite);
       globe.selectionGroup.add(makeSelectionBeam(lat, lng, COLORS.flights));
+    }
+
+    if (type === "satellite") {
+      const historyTrail = makeTrackTrail("satellite", item, "#ffffff", 2.22, { opacity: 0.66 });
+      if (historyTrail) globe.selectionGroup.add(historyTrail);
+      if (Array.isArray(item.orbit) && item.orbit.length) {
+        globe.selectionGroup.add(makePathLine(item.orbit, "#ffffff", 2.235, 0.42));
+        globe.selectionGroup.add(makePathLine(item.orbit, COLORS.satellites, 2.23, 0.78));
+      }
+      globe.selectionGroup.add(makeSelectionBeam(lat, lng, COLORS.satellites));
     }
 
     globe.selectionGroup.add(makePathLine(makeGeoCircle(lat, lng, 55), color, 2.075, 0.74));
@@ -1256,10 +1393,17 @@
 
   function renderSelectionCard(type, item) {
     const color = colorForType(type);
+    const pinned = isPinned(type, item.id);
     els.selectionCard.innerHTML = `<h3>${escapeHtml(item.name || item.callsign || item.title || item.id)}</h3>
       <p>${escapeHtml(assetSubtitle(type, item))}</p>
-      <button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${item.id}" data-focus="true">${type === "alert" ? "Focus Alert" : "Open In Watch Pane"}</button>`;
+      <div class="selection-actions">
+        <button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">${type === "alert" ? "Focus Alert" : "Open In Watch Pane"}</button>
+        <button class="text-button" style="color:${pinned ? "var(--green)" : color}" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">
+          <i data-lucide="${pinned ? "bookmark-check" : "bookmark"}"></i>${pinned ? "Pinned" : "Pin"}
+        </button>
+      </div>`;
     els.selectionCard.classList.add("visible");
+    if (globalThis.lucide) globalThis.lucide.createIcons();
   }
 
   function renderWatch(type, item, options = {}) {
@@ -1284,7 +1428,9 @@
 
   function buildWatchActions(type, item) {
     const actions = [];
-    if (type === "camera") actions.push(`<button class="text-button" type="button" data-select-type="camera" data-select-id="${item.id}">Refresh</button>`);
+    actions.push(`<button class="text-button" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">Center</button>`);
+    actions.push(`<button class="text-button" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">${isPinned(type, item.id) ? "Pinned" : "Pin"}</button>`);
+    if (type === "camera") actions.push(`<button class="text-button" type="button" data-select-type="camera" data-select-id="${escapeHtml(item.id)}">Refresh</button>`);
     if (item.sourcePageUrl || item.sourceUrl || item.officialUrl || item.url) {
       actions.push(`<button class="text-button" type="button" data-open-url="${escapeHtml(item.sourcePageUrl || item.sourceUrl || item.officialUrl || item.url)}">Source</button>`);
     }
@@ -1402,10 +1548,25 @@
       </div>`;
       return;
     }
-    els.watchView.innerHTML = `<div class="watch-placeholder" style="color:${color}">
-      <i data-lucide="${iconForType(type)}"></i>
-      <strong>${escapeHtml(item.name || item.callsign || item.title || item.id)}</strong>
-      <span>${escapeHtml(infoSummary(type, item))}</span>
+    const trackPoints = getTrackPoints(type, item);
+    const trackText = type === "flight"
+      ? trackPoints.length > 1
+        ? `${trackPoints.length} observed positions retained in this browser session.`
+        : "Trail uses current heading until another refresh observes movement."
+      : type === "satellite"
+        ? trackPoints.length > 1
+          ? `${trackPoints.length} observed positions plus computed orbital path.`
+          : "Computed orbital path is highlighted from public element data."
+        : infoSummary(type, item);
+    els.watchView.innerHTML = `<div class="asset-watch" style="border-color:${color}">
+      <div class="asset-watch-icon"><i data-lucide="${iconForType(type)}"></i></div>
+      <div>
+        <span class="media-badge live">${escapeHtml(type)}</span>
+        <h3>${escapeHtml(item.name || item.callsign || item.title || item.id)}</h3>
+        <p>${escapeHtml(infoSummary(type, item))}</p>
+        <p>${escapeHtml(trackText)}</p>
+      </div>
+      <button class="text-button" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">Center On Globe</button>
     </div>`;
     if (globalThis.lucide) globalThis.lucide.createIcons();
   }
@@ -1803,16 +1964,21 @@
         ["Altitude", item.altitudeKm ? `${Math.round(item.altitudeKm)} km` : "estimated"],
         ["Inclination", item.inclination ? `${item.inclination.toFixed(1)} deg` : "unknown"],
         ["Period", item.periodMinutes ? `${item.periodMinutes.toFixed(1)} min` : "unknown"],
+        ["Position", formatLatLng(item.lat, item.lng)],
+        ["Trail", getTrackPoints(type, item).length > 1 ? `${getTrackPoints(type, item).length} points` : "orbit fallback"],
         ["Source", "CelesTrak GP"],
       ];
     }
     if (type === "flight") {
       return [
         ["Callsign", item.callsign || "Unknown"],
+        ["ICAO24", item.icao24 || item.id?.replace(/^flight-/, "") || "unknown"],
         ["Altitude", item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "unknown"],
         ["Velocity", item.velocity ? `${Math.round(item.velocity)} m/s` : "unknown"],
-        ["Heading", item.heading ? `${Math.round(item.heading)} deg` : "unknown"],
+        ["Heading", Number.isFinite(Number(item.heading)) ? `${Math.round(item.heading)} deg` : "unknown"],
         ["Country", item.country || "unknown"],
+        ["Position", formatLatLng(item.lat, item.lng)],
+        ["Trail", getTrackPoints(type, item).length > 1 ? `${getTrackPoints(type, item).length} points` : "heading fallback"],
         ["Source", "OpenSky"],
       ];
     }
@@ -1967,6 +2133,15 @@
     const date = new Date(value || Date.now());
     if (Number.isNaN(date.getTime())) return "--:--";
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function formatLatLng(lat, lng) {
+    const latNum = Number(lat);
+    const lngNum = Number(lng);
+    if (!Number.isFinite(latNum) || !Number.isFinite(lngNum)) return "unknown";
+    const ns = latNum >= 0 ? "N" : "S";
+    const ew = lngNum >= 0 ? "E" : "W";
+    return `${Math.abs(latNum).toFixed(3)} ${ns}, ${Math.abs(lngNum).toFixed(3)} ${ew}`;
   }
 
   function shorten(value, max) {
