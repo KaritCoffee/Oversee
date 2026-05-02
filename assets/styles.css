@@ -442,6 +442,39 @@ a {
   transition: filter 180ms ease;
 }
 
+.cesium-globe {
+  position: absolute;
+  inset: 0;
+  display: none;
+  background: #02070b;
+}
+
+.renderer-cesium #globeCanvas,
+.renderer-three .cesium-globe {
+  display: none;
+}
+
+.renderer-cesium .cesium-globe,
+.renderer-three #globeCanvas {
+  display: block;
+}
+
+.cesium-globe .cesium-widget,
+.cesium-globe .cesium-widget canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.cesium-globe .cesium-widget-credits {
+  right: 10px;
+  bottom: 8px;
+  left: auto;
+  max-width: min(560px, 70vw);
+  color: rgba(215, 233, 245, 0.82);
+  font-size: 10px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
 .stage-vignette {
   position: absolute;
   inset: 0;
@@ -1470,15 +1503,18 @@ a {
   color: var(--red);
 }
 
-.sensor-crt #globeCanvas {
+.sensor-crt #globeCanvas,
+.sensor-crt .cesium-globe canvas {
   filter: contrast(1.18) saturate(1.18);
 }
 
-.sensor-nvg #globeCanvas {
+.sensor-nvg #globeCanvas,
+.sensor-nvg .cesium-globe canvas {
   filter: hue-rotate(72deg) saturate(1.55) contrast(1.16) brightness(0.92);
 }
 
-.sensor-flir #globeCanvas {
+.sensor-flir #globeCanvas,
+.sensor-flir .cesium-globe canvas {
   filter: hue-rotate(175deg) saturate(2.1) contrast(1.34) brightness(1.03);
 }
 

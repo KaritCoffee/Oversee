@@ -20,6 +20,11 @@
     { id: "nasa", label: "NASA" },
   ];
 
+  const GLOBE_RENDERERS = [
+    { id: "cesium", label: "Cesium" },
+    { id: "three", label: "Ops" },
+  ];
+
   const LAYERS = [
     { id: "cameras", label: "Cameras", color: "#19e2ff", icon: "cctv" },
     { id: "satellites", label: "Satellites", color: "#b85cff", icon: "satellite" },
@@ -102,6 +107,7 @@
     scope: "world",
     sensorMode: "crt",
     earthView: "ops",
+    globeRenderer: loadGlobeRendererPreference(),
     layers: Object.fromEntries(LAYERS.map((layer) => [layer.id, true])),
     snapshot: null,
     query: "",
@@ -148,6 +154,15 @@
     dragStartedAt: [0, 0],
   };
 
+  const cesiumGlobe = {
+    viewer: null,
+    ready: false,
+    loading: false,
+    failed: false,
+    sources: {},
+    selectionSource: null,
+  };
+
   const els = {
     body: document.body,
     searchInput: document.getElementById("searchInput"),
@@ -163,6 +178,7 @@
     sourceDrawer: document.getElementById("sourceDrawer"),
     sourceGrid: document.getElementById("sourceGrid"),
     scopeControls: document.getElementById("scopeControls"),
+    globeRendererControls: document.getElementById("globeRendererControls"),
     earthViewControls: document.getElementById("earthViewControls"),
     sensorModeControls: document.getElementById("sensorModeControls"),
     layerControls: document.getElementById("layerControls"),
@@ -201,7 +217,9 @@
     clearSearch: document.getElementById("clearSearch"),
     resetMapArea: document.getElementById("resetMapArea"),
     selectionCard: document.getElementById("selectionCard"),
+    stage: document.querySelector(".stage"),
     globeCanvas: document.getElementById("globeCanvas"),
+    cesiumGlobe: document.getElementById("cesiumGlobe"),
     theaterSubtitle: document.getElementById("theaterSubtitle"),
   };
 
@@ -213,7 +231,9 @@
     renderSourceDrawer();
     initClock();
     initGlobe();
+    initCesiumGlobe();
     initCameraMap();
+    updateRendererVisibility();
     refreshSnapshot({ keepSelection: false });
     setInterval(initClock, 1000);
     setInterval(() => refreshSnapshot({ keepSelection: true, quiet: true }), 60000);
@@ -355,6 +375,8 @@
       if (button) setScope(button.dataset.scope);
     });
 
+    renderGlobeRendererControls();
+
     els.earthViewControls.innerHTML = EARTH_VIEWS.map(
       (view) =>
         `<button class="segment ${view.id === state.earthView ? "active" : ""}" type="button" data-earth-view="${view.id}">${view.label}</button>`
@@ -375,6 +397,17 @@
 
     renderLayerControls();
     renderCameraFilters();
+  }
+
+  function renderGlobeRendererControls() {
+    els.globeRendererControls.innerHTML = GLOBE_RENDERERS.map(
+      (renderer) =>
+        `<button class="segment ${renderer.id === state.globeRenderer ? "active" : ""}" type="button" data-globe-renderer="${renderer.id}">${renderer.label}</button>`
+    ).join("");
+    els.globeRendererControls.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-globe-renderer]");
+      if (button) setGlobeRenderer(button.dataset.globeRenderer);
+    });
   }
 
   function renderLayerControls() {
@@ -814,6 +847,37 @@
     applyEarthView();
   }
 
+  function setGlobeRenderer(rendererId) {
+    const requested = rendererId === "cesium" ? "cesium" : "three";
+    state.globeRenderer = requested === "cesium" && !globalThis.Cesium ? "three" : requested;
+    localStorage.setItem("oversee:globe-renderer", state.globeRenderer);
+    document.querySelectorAll("[data-globe-renderer]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.globeRenderer === state.globeRenderer);
+    });
+    updateRendererVisibility();
+    if (state.globeRenderer === "cesium" && !cesiumGlobe.ready) initCesiumGlobe();
+    renderGlobeLayers();
+    if (state.selection?.item) {
+      renderSelectedGlobeFocus(state.selection.type, state.selection.item);
+      focusGlobeOnItem(state.selection.item);
+    } else {
+      flyGlobeToScope(state.scope);
+    }
+  }
+
+  function updateRendererVisibility() {
+    const useCesium = state.globeRenderer === "cesium" && globalThis.Cesium && !cesiumGlobe.failed;
+    els.stage?.classList.toggle("renderer-cesium", useCesium);
+    els.stage?.classList.toggle("renderer-three", !useCesium);
+    if (!useCesium && state.globeRenderer === "cesium") {
+      state.globeRenderer = "three";
+      document.querySelectorAll("[data-globe-renderer]").forEach((button) => {
+        button.classList.toggle("active", button.dataset.globeRenderer === state.globeRenderer);
+      });
+    }
+    if (useCesium) window.setTimeout(() => cesiumGlobe.viewer?.resize?.(), 50);
+  }
+
   function cycleSensorMode() {
     const index = SENSOR_MODES.findIndex((mode) => mode.id === state.sensorMode);
     const next = SENSOR_MODES[(index + 1) % SENSOR_MODES.length];
@@ -918,6 +982,88 @@
     animateGlobe();
   }
 
+  async function initCesiumGlobe() {
+    if (cesiumGlobe.loading || cesiumGlobe.ready || !els.cesiumGlobe) return;
+    if (!globalThis.Cesium) {
+      cesiumGlobe.failed = true;
+      updateRendererVisibility();
+      return;
+    }
+
+    cesiumGlobe.loading = true;
+    const Cesium = globalThis.Cesium;
+    try {
+      Cesium.Ion.defaultAccessToken = "";
+      const viewer = new Cesium.Viewer(els.cesiumGlobe, {
+        animation: false,
+        timeline: false,
+        baseLayerPicker: false,
+        geocoder: false,
+        homeButton: false,
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        fullscreenButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+        shouldAnimate: true,
+        imageryProvider: false,
+        terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+      });
+
+      viewer.scene.globe.enableLighting = true;
+      viewer.scene.globe.depthTestAgainstTerrain = false;
+      viewer.scene.fog.enabled = true;
+      viewer.scene.skyAtmosphere.show = true;
+      viewer.scene.postProcessStages.fxaa.enabled = true;
+      viewer.camera.setView({
+        destination: Cesium.Cartesian3.fromDegrees(-25, 22, 22000000),
+      });
+
+      cesiumGlobe.viewer = viewer;
+      for (const layer of LAYERS) {
+        const source = new Cesium.CustomDataSource(`oversee-${layer.id}`);
+        cesiumGlobe.sources[layer.id] = source;
+        await viewer.dataSources.add(source);
+      }
+      cesiumGlobe.selectionSource = new Cesium.CustomDataSource("oversee-selection");
+      await viewer.dataSources.add(cesiumGlobe.selectionSource);
+
+      const imageryProvider = await makeCesiumImageryProvider();
+      if (imageryProvider) viewer.imageryLayers.addImageryProvider(imageryProvider);
+
+      viewer.screenSpaceEventHandler.setInputAction((movement) => {
+        const picked = viewer.scene.pick(movement.position);
+        const data = picked?.id?.oversee;
+        if (data?.item) selectObject(data.type, data.item, { focus: false });
+      }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+      cesiumGlobe.ready = true;
+      cesiumGlobe.failed = false;
+      renderCesiumLayers();
+      updateRendererVisibility();
+    } catch (error) {
+      console.warn("Cesium renderer unavailable", error);
+      cesiumGlobe.failed = true;
+      state.globeRenderer = "three";
+      updateRendererVisibility();
+    } finally {
+      cesiumGlobe.loading = false;
+    }
+  }
+
+  async function makeCesiumImageryProvider() {
+    const Cesium = globalThis.Cesium;
+    const url = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer";
+    try {
+      if (Cesium.ArcGisMapServerImageryProvider?.fromUrl) {
+        return await Cesium.ArcGisMapServerImageryProvider.fromUrl(url);
+      }
+      return new Cesium.ArcGisMapServerImageryProvider({ url });
+    } catch {
+      return null;
+    }
+  }
+
   function applyEarthView() {
     if (!globe.earth?.material || !globalThis.THREE) return;
     const material = globe.earth.material;
@@ -978,6 +1124,10 @@
   }
 
   function renderGlobeLayers() {
+    if (state.globeRenderer === "cesium") {
+      renderCesiumLayers();
+      return;
+    }
     if (!globe.scene || !state.snapshot) return;
     globe.pickables = [];
     Object.values(globe.groups).forEach(clearGroup);
@@ -989,6 +1139,160 @@
     if (state.layers.quakes) addMarkers("quakes", filterByQuery(snapshot.quakes), "quake");
     if (state.layers.alerts) addMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
     renderSelectedGlobeFocus();
+  }
+
+  function renderCesiumLayers() {
+    if (!cesiumGlobe.ready || !state.snapshot || !globalThis.Cesium) return;
+    Object.values(cesiumGlobe.sources).forEach((source) => source.entities.removeAll());
+    const snapshot = state.snapshot;
+    if (state.layers.cameras) addCesiumMarkers("cameras", getMapCameras(), "camera");
+    if (state.layers.satellites) addCesiumMarkers("satellites", filterByQuery(snapshot.satellites), "satellite");
+    if (state.layers.flights) addCesiumMarkers("flights", filterByQuery(snapshot.flights), "flight");
+    if (state.layers.quakes) addCesiumMarkers("quakes", filterByQuery(snapshot.quakes), "quake");
+    if (state.layers.alerts) addCesiumMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
+    renderCesiumSelection();
+  }
+
+  function addCesiumMarkers(layerId, items, type) {
+    const source = cesiumGlobe.sources[layerId];
+    if (!source || !globalThis.Cesium) return;
+    const Cesium = globalThis.Cesium;
+    const max = type === "camera" ? 1400 : type === "satellite" ? 900 : type === "flight" ? 1200 : type === "quake" ? 700 : 260;
+    const visible = sampleItems(items, max);
+    for (const item of visible) {
+      const lat = Number(item.lat);
+      const lng = Number(item.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const color = cesiumColor(item.displayColor || COLORS[layerId] || colorForType(type), type === "camera" ? 0.78 : 0.92);
+      const height = cesiumHeightForType(type, item);
+      const entity = source.entities.add({
+        name: item.name || item.callsign || item.title || item.id,
+        position: Cesium.Cartesian3.fromDegrees(lng, lat, height),
+        point: {
+          pixelSize: cesiumPointSize(type, item),
+          color,
+          outlineColor: Cesium.Color.WHITE.withAlpha(0.78),
+          outlineWidth: type === "alert" ? 2 : 1,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          heightReference: Cesium.HeightReference.NONE,
+        },
+      });
+      entity.oversee = { type, item };
+
+      if (type === "satellite" && Array.isArray(item.orbit) && item.orbit.length && source.entities.values.length < 240) {
+        source.entities.add({
+          polyline: {
+            positions: cesiumPositions(item.orbit, Math.max(height, 600000)),
+            width: 1.25,
+            material: color.withAlpha(0.38),
+            arcType: Cesium.ArcType.GEODESIC,
+          },
+        });
+      }
+      if (type === "flight" && source.entities.values.length < 700) {
+        addCesiumTrackLine(source, "flight", item, color.withAlpha(0.56), 2);
+      }
+    }
+  }
+
+  function addCesiumTrackLine(source, type, item, color, width = 2) {
+    const points = getTrackPoints(type, item);
+    let trail = points.length > 1 ? points : [];
+    if (!trail.length && type === "flight" && Number.isFinite(Number(item.heading))) {
+      const speed = clamp(Number(item.velocity || 0), 120, 280);
+      const start = destinationPoint(Number(item.lat), Number(item.lng), Number(item.heading) + 180, (speed * 60 * 8) / 1000);
+      trail = [start, { lat: item.lat, lng: item.lng }];
+    }
+    if (trail.length < 2) return;
+    source.entities.add({
+      polyline: {
+        positions: cesiumPositions(trail, type === "satellite" ? cesiumHeightForType(type, item) : 18000),
+        width,
+        material: color,
+        arcType: globalThis.Cesium.ArcType.GEODESIC,
+      },
+    });
+  }
+
+  function renderCesiumSelection(type = state.selection?.type, item = state.selection?.item) {
+    if (!cesiumGlobe.ready || !cesiumGlobe.selectionSource || !globalThis.Cesium) return;
+    const Cesium = globalThis.Cesium;
+    cesiumGlobe.selectionSource.entities.removeAll();
+    if (!item) return;
+    const lat = Number(item.lat);
+    const lng = Number(item.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const color = cesiumColor(type === "alert" ? COLORS.alerts : colorForType(type), 0.94);
+    const height = cesiumHeightForType(type, item);
+    cesiumGlobe.selectionSource.entities.add({
+      position: Cesium.Cartesian3.fromDegrees(lng, lat, height),
+      point: {
+        pixelSize: 18,
+        color,
+        outlineColor: Cesium.Color.WHITE.withAlpha(0.95),
+        outlineWidth: 3,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+    cesiumGlobe.selectionSource.entities.add({
+      polyline: {
+        positions: Cesium.Cartesian3.fromDegreesArrayHeights([lng, lat, 0, lng, lat, Math.max(height, 450000)]),
+        width: 2,
+        material: color.withAlpha(0.8),
+      },
+    });
+    if (type === "satellite" && Array.isArray(item.orbit) && item.orbit.length) {
+      cesiumGlobe.selectionSource.entities.add({
+        polyline: {
+          positions: cesiumPositions(item.orbit, Math.max(height, 600000)),
+          width: 3,
+          material: cesiumColor(COLORS.satellites, 0.86),
+          arcType: Cesium.ArcType.GEODESIC,
+        },
+      });
+    }
+    if (type === "flight") addCesiumTrackLine(cesiumGlobe.selectionSource, "flight", item, cesiumColor(COLORS.flights, 0.9), 3);
+    if (type === "alert") {
+      const rings = Array.isArray(item.geometryRings) && item.geometryRings.length ? item.geometryRings : [makeGeoCircle(lat, lng, clamp(Number(item.radiusKm || 220), 80, 900))];
+      for (const ring of rings) {
+        cesiumGlobe.selectionSource.entities.add({
+          polyline: {
+            positions: cesiumPositions(ring, 6000),
+            width: 3,
+            material: color.withAlpha(0.9),
+            clampToGround: false,
+          },
+        });
+      }
+    }
+  }
+
+  function cesiumPositions(points, height = 0) {
+    const values = [];
+    for (const point of points) {
+      values.push(Number(point.lng), Number(point.lat), height);
+    }
+    return globalThis.Cesium.Cartesian3.fromDegreesArrayHeights(values);
+  }
+
+  function cesiumColor(hex, alpha = 1) {
+    return globalThis.Cesium.Color.fromCssColorString(hex || COLORS.cameras).withAlpha(alpha);
+  }
+
+  function cesiumHeightForType(type, item) {
+    if (type === "satellite") return clamp(Number(item.altitudeKm || 550), 220, 36000) * 1000;
+    if (type === "flight") return clamp(Number(item.altitudeMeters || 11000), 1200, 16000);
+    if (type === "quake") return 16000;
+    if (type === "alert") return 24000;
+    return 9000;
+  }
+
+  function cesiumPointSize(type, item) {
+    if (type === "quake") return 8 + clamp(Number(item.magnitude || 1) * 1.6, 2, 12);
+    if (type === "satellite") return 7;
+    if (type === "flight") return 8;
+    if (type === "alert") return 10;
+    return 6;
   }
 
   function addMarkers(layerId, items, type) {
@@ -1039,6 +1343,10 @@
   }
 
   function renderSelectedGlobeFocus(type = state.selection?.type, item = state.selection?.item) {
+    if (state.globeRenderer === "cesium") {
+      renderCesiumSelection(type, item);
+      return;
+    }
     if (!globe.selectionGroup) return;
     clearGroup(globe.selectionGroup);
     if (!item) return;
@@ -1246,6 +1554,15 @@
 
   function flyGlobeToScope(scopeId) {
     const scope = SCOPES.find((item) => item.id === scopeId) || SCOPES[0];
+    if (state.globeRenderer === "cesium" && cesiumGlobe.ready) {
+      const Cesium = globalThis.Cesium;
+      const height = Math.max(2400000, 19000000 - Math.min(scope.zoom, 6) * 2500000);
+      cesiumGlobe.viewer.camera.flyTo({
+        destination: Cesium.Cartesian3.fromDegrees(scope.center[1], scope.center[0], height),
+        duration: 0.8,
+      });
+      return;
+    }
     if (!globe.camera || !globe.controls) return;
     const target = latLngToVector3(scope.center[0], scope.center[1], 5.2 - Math.min(scope.zoom, 6) * 0.16);
     globe.camera.position.lerp(target, 0.22);
@@ -1255,6 +1572,18 @@
   function focusGlobeOnItem(item, options = {}) {
     const lat = Number(item?.lat);
     const lng = Number(item?.lng);
+    if (state.globeRenderer === "cesium" && cesiumGlobe.ready && Number.isFinite(lat) && Number.isFinite(lng)) {
+      const height = item.type === "satellite" || item.altitudeKm ? 7200000 : item.type === "flight" ? 1800000 : 900000;
+      cesiumGlobe.viewer.camera.flyTo({
+        destination: globalThis.Cesium.Cartesian3.fromDegrees(lng, lat, height),
+        duration: 0.7,
+      });
+      if (options.pulse) {
+        els.selectionCard.classList.remove("pulse");
+        window.setTimeout(() => els.selectionCard.classList.add("pulse"), 0);
+      }
+      return;
+    }
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || !globe.camera) return;
     const distance = item.type === "satellite" || item.altitudeKm ? 5.4 : 4.15;
     const target = latLngToVector3(lat, lng, 1).normalize().multiplyScalar(distance);
@@ -2144,6 +2473,11 @@
     const ns = latNum >= 0 ? "N" : "S";
     const ew = lngNum >= 0 ? "E" : "W";
     return `${Math.abs(latNum).toFixed(3)} ${ns}, ${Math.abs(lngNum).toFixed(3)} ${ew}`;
+  }
+
+  function loadGlobeRendererPreference() {
+    const saved = localStorage.getItem("oversee:globe-renderer");
+    return saved === "three" || saved === "cesium" ? saved : "cesium";
   }
 
   function shorten(value, max) {

@@ -11,6 +11,7 @@
       rel="stylesheet"
     />
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/cesium@1.123.1/Build/Cesium/Widgets/widgets.css" />
     <link rel="stylesheet" href="./assets/styles.css" />
   </head>
   <body class="sensor-crt">
@@ -101,9 +102,11 @@
 
             <div class="stage">
               <canvas id="globeCanvas" aria-label="Interactive 3D globe"></canvas>
+              <div id="cesiumGlobe" class="cesium-globe" aria-label="Interactive Cesium globe"></div>
               <div class="stage-vignette" aria-hidden="true"></div>
               <div class="stage-toolbar">
                 <div class="segmented-control" id="scopeControls" aria-label="Scope"></div>
+                <div class="segmented-control compact" id="globeRendererControls" aria-label="Globe renderer"></div>
                 <div class="segmented-control compact" id="earthViewControls" aria-label="Earth imagery"></div>
                 <div class="segmented-control compact" id="sensorModeControls" aria-label="Sensor mode"></div>
               </div>
@@ -287,6 +290,10 @@
     <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+      window.CESIUM_BASE_URL = "https://unpkg.com/cesium@1.123.1/Build/Cesium/";
+    </script>
+    <script src="https://unpkg.com/cesium@1.123.1/Build/Cesium/Cesium.js"></script>
     <script src="./assets/data.js"></script>
     <script src="./assets/feed-meta.js"></script>
     <script src="./assets/app.js"></script>
