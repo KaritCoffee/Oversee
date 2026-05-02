@@ -660,7 +660,7 @@ a {
   top: 132px;
   z-index: 4;
   width: min(340px, calc(100% - 36px));
-  padding: 12px;
+  padding: 12px 42px 12px 12px;
   border: 1px solid rgba(92, 157, 196, 0.34);
   border-radius: 8px;
   background: rgba(2, 9, 14, 0.78);
@@ -674,6 +674,30 @@ a {
   opacity: 1;
   transform: translateY(0);
   pointer-events: auto;
+}
+
+.selection-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.selection-close:hover {
+  border-color: rgba(25, 226, 255, 0.62);
+  color: white;
+  background: rgba(25, 226, 255, 0.14);
+}
+
+.selection-close svg {
+  width: 15px;
+  height: 15px;
 }
 
 .selection-card h3 {

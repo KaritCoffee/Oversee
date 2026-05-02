@@ -312,6 +312,11 @@
     els.toggleRadarOverlay.addEventListener("click", toggleRadarOverlay);
 
     document.body.addEventListener("click", (event) => {
+      if (event.target.closest("[data-close-selection]")) {
+        clearSelectionCard();
+        return;
+      }
+
       const nav = event.target.closest("[data-view-jump]");
       if (nav) {
         document.getElementById(nav.dataset.viewJump)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1753,7 +1758,10 @@
   function renderSelectionCard(type, item) {
     const color = colorForType(type);
     const pinned = isPinned(type, item.id);
-    els.selectionCard.innerHTML = `<h3>${escapeHtml(item.name || item.callsign || item.title || item.id)}</h3>
+    els.selectionCard.innerHTML = `<button class="selection-close" type="button" data-close-selection aria-label="Close selection card">
+        <i data-lucide="x"></i>
+      </button>
+      <h3>${escapeHtml(item.name || item.callsign || item.title || item.id)}</h3>
       <p>${escapeHtml(assetSubtitle(type, item))}</p>
       <div class="selection-actions">
         <button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">${type === "alert" ? "Focus Alert" : "Open In Watch Pane"}</button>
@@ -1763,6 +1771,15 @@
       </div>`;
     els.selectionCard.classList.add("visible");
     if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function clearSelectionCard() {
+    state.selection = null;
+    state.feedView = null;
+    els.selectionCard.classList.remove("visible", "pulse");
+    renderSelectedGlobeFocus(null, null);
+    renderCesiumSelection(null, null);
+    renderCatalog();
   }
 
   function renderWatch(type, item, options = {}) {
