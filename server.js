@@ -34,6 +34,10 @@ const SOURCE_URLS = {
   nasaGibsWms: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
   minnesota511Cameras: "https://mntg.carsprogram.org/cameras_v1/api/cameras",
   coloradoCotripCameras: "https://cotg.carsprogram.org/cameras_v1/api/cameras",
+  nebraska511Cameras: "https://netg.carsprogram.org/cameras_v1/api/cameras",
+  kansas511Cameras: "https://kstg.carsprogram.org/cameras_v1/api/cameras",
+  southDakota511Cameras: "https://sdtg.carsprogram.org/cameras_v1/api/cameras",
+  northDakotaCameras: "https://travelfiles.dot.nd.gov/geojson_nc/cameras.json",
   missouriSnapshots: "https://traveler.modot.org/map/js/snapshot.json",
   arizonaListCameras: "https://az511.com/List/GetData/Cameras",
 };
@@ -59,6 +63,22 @@ const DYNAMIC_CAMERAS_BY_ID = new Map();
 const CELESTRAK_FALLBACK_GROUPS = ["visual", "stations", "starlink", "gps-ops", "gnss", "geo", "weather", "resource"];
 
 const ARCGIS_CAMERA_SOURCES = [
+  {
+    id: "txdot-windy",
+    name: "Texas TxDOT / Windy Cameras",
+    url: "https://services7.arcgis.com/bF49JeI2xZRhCsD9/arcgis/rest/services/TxDoT_Cameras/FeatureServer/0/query",
+    where: "url IS NOT NULL AND url <> '' AND status = 'Active'",
+    country: "United States",
+    region: "Texas",
+    category: "traffic",
+    nameFields: ["Equipment_Name", "Direction"],
+    areaFields: ["city", "county", "District_Name"],
+    imageFields: ["url"],
+    useGeometryCoordinates: true,
+    refreshSeconds: 180,
+    officialUrl: "https://drivetexas.org/",
+    tags: ["texas", "txdot", "windy", "traffic"],
+  },
   {
     id: "oregon-tripcheck",
     name: "Oregon TripCheck Cameras",
@@ -486,6 +506,54 @@ function cameraAdapterSpecs(scope) {
       }),
     });
     adapters.push({
+      key: "cameras:nebraska-511",
+      name: "Nebraska 511 Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: () => fetchCarsProgramCameras({
+        idPrefix: "ne511",
+        sourceName: "Nebraska 511 Cameras",
+        url: SOURCE_URLS.nebraska511Cameras,
+        origin: "https://new.511.nebraska.gov",
+        officialUrl: "https://new.511.nebraska.gov/",
+        region: "Nebraska",
+        tags: ["nebraska", "ne511", "ndot", "traffic"],
+      }),
+    });
+    adapters.push({
+      key: "cameras:kansas-511",
+      name: "Kansas 511 Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: () => fetchCarsProgramCameras({
+        idPrefix: "ks511",
+        sourceName: "Kansas 511 Cameras",
+        url: SOURCE_URLS.kansas511Cameras,
+        origin: "https://www.kandrive.gov",
+        officialUrl: "https://www.kandrive.gov/",
+        region: "Kansas",
+        tags: ["kansas", "kandrive", "ksdot", "traffic"],
+      }),
+    });
+    adapters.push({
+      key: "cameras:south-dakota-511",
+      name: "South Dakota 511 Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: () => fetchCarsProgramCameras({
+        idPrefix: "sd511",
+        sourceName: "South Dakota 511 Cameras",
+        url: SOURCE_URLS.southDakota511Cameras,
+        origin: "https://sd511.org",
+        officialUrl: "https://sd511.org/",
+        region: "South Dakota",
+        tags: ["south-dakota", "sd511", "sddot", "traffic"],
+      }),
+    });
+    adapters.push({
+      key: "cameras:north-dakota-dot",
+      name: "North Dakota DOT Cameras",
+      ttlMs: 5 * 60 * 1000,
+      fetcher: fetchNorthDakotaCameras,
+    });
+    adapters.push({
       key: "cameras:missouri-modot",
       name: "Missouri MoDOT Cameras",
       ttlMs: 2 * 60 * 1000,
@@ -636,12 +704,15 @@ async function fetchTflJamCams() {
 }
 
 async function fetchCarsProgramCameras(source) {
+  const headers = source.origin
+    ? {
+        Origin: source.origin,
+        Referer: `${source.origin}/`,
+      }
+    : undefined;
   const records = await fetchJson(source.url, {
     timeoutMs: 18000,
-    headers: {
-      Origin: source.origin,
-      Referer: `${source.origin}/`,
-    },
+    headers,
   });
   return (Array.isArray(records) ? records : [])
     .flatMap((record) => {
@@ -733,6 +804,52 @@ async function fetchMissouriSnapshotCameras() {
       };
     })
     .filter(Boolean);
+}
+
+async function fetchNorthDakotaCameras() {
+  const data = await fetchJson(SOURCE_URLS.northDakotaCameras, { timeoutMs: 14000 });
+  return (data.features || []).flatMap((feature) => {
+    const [lng, lat] = feature?.geometry?.coordinates || [];
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return [];
+    const region = cleanCameraText(feature?.properties?.Region || "North Dakota");
+    return (feature?.properties?.Cameras || [])
+      .map((camera, index) => {
+        const imageUrl = normalizeUrl(camera.FullPath || camera.LinkPath);
+        if (!imageUrl) return null;
+        const name = cleanCameraText(camera.Description || `${region} traffic camera`);
+        const direction = cleanCameraText(camera.Direction || "");
+        return {
+          id: `nddot-${feature.id}-${index}`,
+          dynamic: true,
+          type: "camera",
+          name,
+          shortName: shortCameraName(name),
+          area: region,
+          region: "North Dakota",
+          county: region,
+          country: "United States",
+          category: "traffic",
+          media: "still",
+          status: "Online",
+          freshness: 5,
+          tags: ["north-dakota", "nddot", "511", "traffic", region, direction].filter(Boolean),
+          sourceId: "nddot",
+          sourceName: "North Dakota DOT Cameras",
+          sourceUrl: SOURCE_URLS.northDakotaCameras,
+          officialUrl: "https://travel.dot.nd.gov/",
+          sourcePageUrl: "https://travel.dot.nd.gov/",
+          lat: Number(lat),
+          lng: Number(lng),
+          viewerType: "image",
+          capability: "snapshot",
+          capabilityLabel: "Current Still",
+          previewUrl: imageUrl,
+          imageUrl,
+          refreshSeconds: 300,
+        };
+      })
+      .filter(Boolean);
+  });
 }
 
 async function fetchArizona511Cameras() {
@@ -897,7 +1014,7 @@ async function fetchArcgisCameras(source) {
   const maxRecords = source.maxRecords || 8000;
   for (let offset = 0; offset < maxRecords; offset += pageSize) {
     const url = new URL(source.url);
-    url.searchParams.set("where", "1=1");
+    url.searchParams.set("where", source.where || "1=1");
     url.searchParams.set("outFields", "*");
     url.searchParams.set("returnGeometry", "true");
     url.searchParams.set("outSR", "4326");
@@ -918,12 +1035,10 @@ async function fetchArcgisCameras(source) {
 function mapArcgisCamera(feature, source) {
   const attributes = feature?.attributes || {};
   if (!isArcgisCameraEnabled(attributes, source)) return null;
-  const lat = validLat(attributes.LATITUDE ?? attributes.Latitude ?? attributes.latitude ?? attributes.Lat ?? attributes.lat)
-    ? Number(attributes.LATITUDE ?? attributes.Latitude ?? attributes.latitude ?? attributes.Lat ?? attributes.lat)
-    : Number(feature?.geometry?.y);
-  const lng = validLng(attributes.LONGITUDE ?? attributes.Longitude ?? attributes.longitude ?? attributes.Lon ?? attributes.lng)
-    ? Number(attributes.LONGITUDE ?? attributes.Longitude ?? attributes.longitude ?? attributes.Lon ?? attributes.lng)
-    : Number(feature?.geometry?.x);
+  const attrLat = attributes.LATITUDE ?? attributes.Latitude ?? attributes.latitude ?? attributes.Lat ?? attributes.lat;
+  const attrLng = attributes.LONGITUDE ?? attributes.Longitude ?? attributes.longitude ?? attributes.Lon ?? attributes.lng;
+  const lat = source.useGeometryCoordinates || !validLat(attrLat) ? Number(feature?.geometry?.y) : Number(attrLat);
+  const lng = source.useGeometryCoordinates || !validLng(attrLng) ? Number(feature?.geometry?.x) : Number(attrLng);
   const imageUrl = normalizeUrl(firstFieldValue(attributes, source.imageFields));
   const streamUrl = source.trustHls ? normalizeUrl(firstFieldValue(attributes, source.streamFields)) : "";
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!imageUrl && !streamUrl)) return null;
