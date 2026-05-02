@@ -42,6 +42,6 @@ src-tauri\target\release\bundle
 
 ## Current Packaging Note
 
-This first Windows shell expects a `node` runtime to be available when the desktop app starts. That keeps the existing public-feed server intact and low-risk.
+The Windows build copies the local `node.exe` into Tauri resources before packaging, so the installer can run the existing public-feed server without requiring Node.js on the recipient's machine.
 
-For a fully self-contained installer later, bundle `node.exe` as a Tauri resource or convert the small local API server into Rust commands.
+Longer term, the local API server could be converted into Rust commands to reduce installer size, but bundling Node keeps the current data adapters intact with much lower risk.

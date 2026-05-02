@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "check": "node --check server.js && node --check assets/app.js",
+    "predesktop:build": "powershell -ExecutionPolicy Bypass -File ./scripts/prepare-windows-runtime.ps1",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "desktop:info": "tauri info"

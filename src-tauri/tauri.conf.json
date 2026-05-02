@@ -22,7 +22,8 @@
       "../index.html",
       "../assets",
       "../docs",
-      "../README.md"
+      "../README.md",
+      "resources/node.exe"
     ]
   }
 }

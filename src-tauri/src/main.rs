@@ -88,8 +88,12 @@ fn app_root(app: &tauri::App) -> PathBuf {
 
 fn node_runtime_path(app: &tauri::App) -> Option<PathBuf> {
   let resource_dir = app.path().resource_dir().ok()?;
-  let bundled_node = resource_dir.join("node.exe");
-  bundled_node.exists().then_some(bundled_node)
+  let candidates = [
+    resource_dir.join("node.exe"),
+    resource_dir.join("resources").join("node.exe"),
+  ];
+
+  candidates.into_iter().find(|path| path.exists())
 }
 
 fn server_is_running() -> bool {
