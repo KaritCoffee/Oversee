@@ -33,7 +33,9 @@ const SOURCE_URLS = {
   tflJamCams: "https://api.tfl.gov.uk/Place/Type/JamCam",
   nasaGibsWms: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
   minnesota511Cameras: "https://mntg.carsprogram.org/cameras_v1/api/cameras",
+  coloradoCotripCameras: "https://cotg.carsprogram.org/cameras_v1/api/cameras",
   missouriSnapshots: "https://traveler.modot.org/map/js/snapshot.json",
+  arizonaListCameras: "https://az511.com/List/GetData/Cameras",
 };
 
 const GIBS_TEXTURES = {
@@ -459,13 +461,41 @@ function cameraAdapterSpecs(scope) {
       key: "cameras:minnesota-511",
       name: "Minnesota 511 Cameras",
       ttlMs: 2 * 60 * 1000,
-      fetcher: fetchMinnesota511Cameras,
+      fetcher: () => fetchCarsProgramCameras({
+        idPrefix: "mn511",
+        sourceName: "Minnesota 511 Cameras",
+        url: SOURCE_URLS.minnesota511Cameras,
+        origin: "https://511mn.org",
+        officialUrl: "https://511mn.org/",
+        region: "Minnesota",
+        tags: ["minnesota", "mn511", "mndot", "traffic"],
+      }),
+    });
+    adapters.push({
+      key: "cameras:colorado-cotrip",
+      name: "Colorado COTRIP Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: () => fetchCarsProgramCameras({
+        idPrefix: "cotrip",
+        sourceName: "Colorado COTRIP Cameras",
+        url: SOURCE_URLS.coloradoCotripCameras,
+        origin: "https://www.cotrip.org",
+        officialUrl: "https://www.cotrip.org/",
+        region: "Colorado",
+        tags: ["colorado", "cotrip", "cdot", "traffic"],
+      }),
     });
     adapters.push({
       key: "cameras:missouri-modot",
       name: "Missouri MoDOT Cameras",
       ttlMs: 2 * 60 * 1000,
       fetcher: fetchMissouriSnapshotCameras,
+    });
+    adapters.push({
+      key: "cameras:arizona-511",
+      name: "Arizona 511 Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: fetchArizona511Cameras,
     });
   }
   if (scope === "world") {
@@ -605,12 +635,12 @@ async function fetchTflJamCams() {
     .filter(Boolean);
 }
 
-async function fetchMinnesota511Cameras() {
-  const records = await fetchJson(SOURCE_URLS.minnesota511Cameras, {
+async function fetchCarsProgramCameras(source) {
+  const records = await fetchJson(source.url, {
     timeoutMs: 18000,
     headers: {
-      Origin: "https://511mn.org",
-      Referer: "https://511mn.org/",
+      Origin: source.origin,
+      Referer: `${source.origin}/`,
     },
   });
   return (Array.isArray(records) ? records : [])
@@ -625,29 +655,29 @@ async function fetchMinnesota511Cameras() {
           const streamUrl = /\.m3u8(?:$|\?)/i.test(primaryUrl) ? primaryUrl : "";
           const imageUrl = normalizeUrl(view.videoPreviewUrl) || (!streamUrl ? primaryUrl : "");
           if (!streamUrl && !imageUrl) return null;
-          const name = cleanCameraText(view.name || record.name || "Minnesota 511 camera");
+          const name = cleanCameraText(view.name || record.name || `${source.region} traffic camera`);
           const route = cleanCameraText(record.location?.routeId || "");
           const city = cleanCameraText(record.location?.cityReference || "");
           return {
-            id: `mn511-${record.id}-${index}`,
+            id: `${source.idPrefix}-${record.id}-${index}`,
             dynamic: true,
             type: "camera",
             name,
             shortName: shortCameraName(name),
-            area: city || route || "Minnesota",
-            region: "Minnesota",
-            county: city || route || "Minnesota",
+            area: city || route || source.region,
+            region: source.region,
+            county: city || route || source.region,
             country: "United States",
             category: "traffic",
             media: streamUrl ? "video" : "still",
             status: "Online",
             freshness: 1,
-            tags: ["minnesota", "mn511", "mndot", "traffic", route, city].filter(Boolean),
-            sourceId: "mn511",
-            sourceName: "Minnesota 511 Cameras",
-            sourceUrl: SOURCE_URLS.minnesota511Cameras,
-            officialUrl: "https://511mn.org/",
-            sourcePageUrl: "https://511mn.org/",
+            tags: [...source.tags, route, city].filter(Boolean),
+            sourceId: source.idPrefix,
+            sourceName: source.sourceName,
+            sourceUrl: source.url,
+            officialUrl: source.officialUrl,
+            sourcePageUrl: source.officialUrl,
             lat,
             lng,
             viewerType: streamUrl ? "hls" : "image",
@@ -703,6 +733,96 @@ async function fetchMissouriSnapshotCameras() {
       };
     })
     .filter(Boolean);
+}
+
+async function fetchArizona511Cameras() {
+  const pageSize = 100;
+  const rows = [];
+  let total = Infinity;
+  for (let start = 0; start < total && start < 1200; start += pageSize) {
+    const data = await fetchJson(SOURCE_URLS.arizonaListCameras, {
+      method: "POST",
+      body: buildArizonaCameraForm(start, pageSize),
+      timeoutMs: 18000,
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Requested-With": "XMLHttpRequest",
+        Referer: "https://az511.com/list/cameras",
+        Origin: "https://az511.com",
+      },
+    });
+    total = Number(data.recordsFiltered || data.recordsTotal || 0) || total;
+    const page = data.data || [];
+    rows.push(...page);
+    if (!page.length || page.length < pageSize) break;
+  }
+
+  return rows
+    .flatMap((record) => {
+      const point = parseWellKnownPoint(record.latLng?.geography?.wellKnownText);
+      const lat = point?.lat;
+      const lng = point?.lng;
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+      return (record.images || [])
+        .map((image, index) => {
+          if (image.disabled || image.blocked || !image.imageUrl) return null;
+          const imageUrl = new URL(image.imageUrl, "https://az511.com").href;
+          const name = cleanCameraText(image.description || record.location || "Arizona 511 camera");
+          return {
+            id: `az511-${record.id}-${image.id || index}`,
+            dynamic: true,
+            type: "camera",
+            name,
+            shortName: shortCameraName(name),
+            area: record.city || record.county || record.roadway || "Arizona",
+            region: "Arizona",
+            county: record.county || record.city || "Arizona",
+            country: "United States",
+            category: "traffic",
+            media: "still",
+            status: "Online",
+            freshness: 2,
+            tags: ["arizona", "az511", "adot", "traffic", record.roadway, record.city, record.county].filter(Boolean),
+            sourceId: "az511",
+            sourceName: "Arizona 511 Cameras",
+            sourceUrl: SOURCE_URLS.arizonaListCameras,
+            officialUrl: "https://az511.com/list/cameras",
+            sourcePageUrl: "https://az511.com/list/cameras",
+            lat,
+            lng,
+            viewerType: "image",
+            capability: "snapshot",
+            capabilityLabel: "Current Still",
+            previewUrl: imageUrl,
+            imageUrl,
+            refreshSeconds: 120,
+          };
+        })
+        .filter(Boolean);
+    });
+}
+
+function buildArizonaCameraForm(start, length) {
+  const form = new URLSearchParams();
+  form.set("draw", "1");
+  form.set("start", String(start));
+  form.set("length", String(length));
+  form.set("search[value]", "");
+  form.set("order[0][column]", "0");
+  form.set("order[0][dir]", "asc");
+  const columns = [
+    ["sortOrder", false],
+    ["city", true],
+    ["roadway", true],
+    ["location", false],
+  ];
+  columns.forEach(([name, searchable], index) => {
+    form.set(`columns[${index}][data]`, name);
+    form.set(`columns[${index}][name]`, name);
+    form.set(`columns[${index}][orderable]`, "true");
+    form.set(`columns[${index}][searchable]`, searchable ? "true" : "false");
+  });
+  return form.toString();
 }
 
 async function fetchCaltransCameras() {
@@ -902,6 +1022,14 @@ function normalizeModotUrl(value) {
   if (!text) return "";
   if (/^https?:\/\//i.test(text)) return text;
   return new URL(text, "https://traveler.modot.org/").href;
+}
+
+function parseWellKnownPoint(value) {
+  const match = /POINT\s*\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)/i.exec(String(value || ""));
+  if (!match) return null;
+  const lng = Number(match[1]);
+  const lat = Number(match[2]);
+  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : null;
 }
 
 function cleanCameraText(value) {
@@ -1733,11 +1861,13 @@ function healthFromResult(name, result, count) {
 
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
+    method: options.method || "GET",
     headers: {
       "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
       Accept: "application/geo+json, application/json, text/plain;q=0.9, */*;q=0.8",
       ...(options.headers || {}),
     },
+    body: options.body,
     signal: AbortSignal.timeout(options.timeoutMs || 9000),
   });
 
