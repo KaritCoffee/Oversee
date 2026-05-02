@@ -13,6 +13,7 @@ Oversee is a browser-based operations console inspired by WorldView-style geospa
 - USGS all-day earthquake GeoJSON feed without magnitude filtering
 - NASA FIRMS VIIRS near-real-time fire hotspot layer when a local FIRMS map key is configured
 - National Weather Service active alerts for US scopes
+- NOAA/NWS radar base reflectivity overlay for weather context on the Cesium globe
 - Alert cards that show affected areas and center the 3D globe on the selected alert
 - Leaflet/OpenStreetMap global camera map
 - Sensor modes for CRT, night vision, FLIR-style, and clean viewing

@@ -25,6 +25,8 @@
     { id: "three", label: "Ops" },
   ];
 
+  const NOAA_RADAR_ARCGIS_URL = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/radar/radar_base_reflectivity_time/ImageServer";
+
   const LAYERS = [
     { id: "cameras", label: "Cameras", color: "#19e2ff", icon: "cctv" },
     { id: "satellites", label: "Satellites", color: "#b85cff", icon: "satellite" },
@@ -128,6 +130,7 @@
     cameraLayer: null,
     radarLayer: null,
     radarOverlay: false,
+    globeWeatherOverlay: false,
     cameraRenderer: null,
     hls: null,
     stillRefreshTimer: null,
@@ -191,6 +194,7 @@
     openAlertDrawer: document.getElementById("openAlertDrawer"),
     closeAlertDrawer: document.getElementById("closeAlertDrawer"),
     alertDrawerCount: document.getElementById("alertDrawerCount"),
+    toggleGlobeWeather: document.getElementById("toggleGlobeWeather"),
     regionList: document.getElementById("regionList"),
     sortRegions: document.getElementById("sortRegions"),
     cameraFilterControls: document.getElementById("cameraFilterControls"),
@@ -271,6 +275,7 @@
     els.closeSourcePanel.addEventListener("click", () => toggleSourceDrawer(false));
     els.openAlertDrawer.addEventListener("click", () => toggleAlertDrawer());
     els.closeAlertDrawer.addEventListener("click", () => toggleAlertDrawer(false));
+    els.toggleGlobeWeather.addEventListener("click", toggleGlobeWeatherOverlay);
     els.openSignalModal.addEventListener("click", () => toggleInsightModal("signal", true));
     els.openLayerModal.addEventListener("click", () => toggleInsightModal("layer", true));
     els.sortRegions.addEventListener("click", () => {
@@ -1066,6 +1071,7 @@
 
       const imageryProvider = await makeCesiumImageryProvider();
       if (imageryProvider) viewer.imageryLayers.addImageryProvider(imageryProvider);
+      updateCesiumWeatherLayer();
 
       viewer.screenSpaceEventHandler.setInputAction((movement) => {
         const picked = viewer.scene.pick(movement.position);
@@ -1098,6 +1104,56 @@
     } catch {
       return null;
     }
+  }
+
+  async function makeNoaaRadarProvider() {
+    const Cesium = globalThis.Cesium;
+    if (!Cesium) return null;
+    try {
+      if (Cesium.ArcGisMapServerImageryProvider?.fromUrl) {
+        return await Cesium.ArcGisMapServerImageryProvider.fromUrl(NOAA_RADAR_ARCGIS_URL);
+      }
+      return new Cesium.ArcGisMapServerImageryProvider({ url: NOAA_RADAR_ARCGIS_URL });
+    } catch (error) {
+      console.warn("NOAA radar overlay unavailable", error);
+      return null;
+    }
+  }
+
+  async function toggleGlobeWeatherOverlay() {
+    state.globeWeatherOverlay = !state.globeWeatherOverlay;
+    if (state.globeWeatherOverlay && state.globeRenderer !== "cesium") {
+      setGlobeRenderer("cesium");
+    }
+    await updateCesiumWeatherLayer();
+  }
+
+  async function updateCesiumWeatherLayer() {
+    els.toggleGlobeWeather.classList.toggle("active", state.globeWeatherOverlay);
+    els.toggleGlobeWeather.setAttribute("aria-pressed", state.globeWeatherOverlay ? "true" : "false");
+
+    const viewer = cesiumGlobe.viewer;
+    if (!viewer || !globalThis.Cesium) return;
+
+    if (!state.globeWeatherOverlay) {
+      if (cesiumGlobe.weatherLayer) {
+        viewer.imageryLayers.remove(cesiumGlobe.weatherLayer, false);
+        cesiumGlobe.weatherLayer = null;
+      }
+      return;
+    }
+
+    if (cesiumGlobe.weatherLayer) return;
+    const provider = await makeNoaaRadarProvider();
+    if (!provider) {
+      state.globeWeatherOverlay = false;
+      els.toggleGlobeWeather.classList.remove("active");
+      els.toggleGlobeWeather.setAttribute("aria-pressed", "false");
+      return;
+    }
+    cesiumGlobe.weatherLayer = viewer.imageryLayers.addImageryProvider(provider);
+    cesiumGlobe.weatherLayer.alpha = 0.58;
+    cesiumGlobe.weatherLayer.brightness = 1.08;
   }
 
   function applyEarthView() {
