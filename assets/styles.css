@@ -596,9 +596,9 @@ a {
   background: #ff4e57;
 }
 
-.weather-overlay-toggle {
+.weather-overlay-toggle,
+.flood-overlay-toggle {
   position: absolute;
-  top: 64px;
   right: 18px;
   z-index: 8;
   display: inline-flex;
@@ -618,15 +618,32 @@ a {
   box-shadow: 0 0 22px rgba(25, 226, 255, 0.12);
 }
 
+.weather-overlay-toggle {
+  top: 64px;
+}
+
+.flood-overlay-toggle {
+  top: 108px;
+}
+
 .weather-overlay-toggle:hover,
-.weather-overlay-toggle.active {
+.weather-overlay-toggle.active,
+.flood-overlay-toggle:hover,
+.flood-overlay-toggle.active {
   border-color: rgba(25, 226, 255, 0.78);
   color: white;
   background: rgba(0, 96, 150, 0.82);
   transform: translateY(-1px);
 }
 
-.weather-overlay-toggle svg {
+.flood-overlay-toggle.active {
+  border-color: rgba(24, 240, 160, 0.75);
+  background: rgba(0, 104, 68, 0.82);
+  box-shadow: 0 0 24px rgba(24, 240, 160, 0.15);
+}
+
+.weather-overlay-toggle svg,
+.flood-overlay-toggle svg {
   width: 16px;
   height: 16px;
 }
@@ -1843,9 +1860,14 @@ a {
     right: 12px;
   }
 
-  .weather-overlay-toggle {
+  .weather-overlay-toggle,
+  .flood-overlay-toggle {
     top: 56px;
     right: 12px;
+  }
+
+  .flood-overlay-toggle {
+    top: 100px;
   }
 
   .alert-drawer {

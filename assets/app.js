@@ -26,6 +26,8 @@
   ];
 
   const NOAA_RADAR_ARCGIS_URL = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/radar/radar_base_reflectivity_time/ImageServer";
+  const FEMA_FLOOD_ARCGIS_URL = "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer";
+  const FEMA_FLOOD_LAYERS = "show:27,28";
 
   const LAYERS = [
     { id: "cameras", label: "Cameras", color: "#19e2ff", icon: "cctv" },
@@ -64,6 +66,11 @@
       name: "NOAA Radar WMS",
       status: "Free public weather overlay",
       detail: "The camera map can overlay CONUS base reflectivity from NOAA/NCEP without requiring a subscription.",
+    },
+    {
+      name: "FEMA National Flood Hazard Layer",
+      status: "Free public hazard overlay",
+      detail: "Flood Hazard Zones and Flood Hazard Boundaries can be toggled on the globe or camera map for US flood-risk context.",
     },
     {
       name: "OpenSky Network",
@@ -130,7 +137,10 @@
     cameraLayer: null,
     radarLayer: null,
     radarOverlay: false,
+    floodLayer: null,
+    floodOverlay: false,
     globeWeatherOverlay: false,
+    globeFloodOverlay: false,
     cameraRenderer: null,
     hls: null,
     stillRefreshTimer: null,
@@ -194,6 +204,7 @@
     closeAlertDrawer: document.getElementById("closeAlertDrawer"),
     alertDrawerCount: document.getElementById("alertDrawerCount"),
     toggleGlobeWeather: document.getElementById("toggleGlobeWeather"),
+    toggleGlobeFlood: document.getElementById("toggleGlobeFlood"),
     regionList: document.getElementById("regionList"),
     sortRegions: document.getElementById("sortRegions"),
     cameraFilterControls: document.getElementById("cameraFilterControls"),
@@ -220,6 +231,7 @@
     watchDetail: document.getElementById("watchDetail"),
     cameraMap: document.getElementById("cameraMap"),
     toggleRadarOverlay: document.getElementById("toggleRadarOverlay"),
+    toggleFloodOverlay: document.getElementById("toggleFloodOverlay"),
     cameraMapMeta: document.getElementById("cameraMapMeta"),
     catalogList: document.getElementById("catalogList"),
     catalogTitle: document.getElementById("catalogTitle"),
@@ -275,6 +287,7 @@
     els.openAlertDrawer.addEventListener("click", () => toggleAlertDrawer());
     els.closeAlertDrawer.addEventListener("click", () => toggleAlertDrawer(false));
     els.toggleGlobeWeather.addEventListener("click", toggleGlobeWeatherOverlay);
+    els.toggleGlobeFlood.addEventListener("click", toggleGlobeFloodOverlay);
     els.openSignalModal.addEventListener("click", () => toggleInsightModal("signal", true));
     els.openLayerModal.addEventListener("click", () => toggleInsightModal("layer", true));
     els.sortRegions.addEventListener("click", () => {
@@ -316,6 +329,7 @@
       renderCatalog();
     });
     els.toggleRadarOverlay.addEventListener("click", toggleRadarOverlay);
+    els.toggleFloodOverlay.addEventListener("click", toggleFloodOverlay);
 
     document.body.addEventListener("click", (event) => {
       if (event.target.closest("[data-close-selection]")) {
@@ -1068,6 +1082,7 @@
       const imageryProvider = await makeCesiumImageryProvider();
       if (imageryProvider) viewer.imageryLayers.addImageryProvider(imageryProvider);
       updateCesiumWeatherLayer();
+      updateCesiumFloodLayer();
 
       viewer.screenSpaceEventHandler.setInputAction((movement) => {
         const picked = viewer.scene.pick(movement.position);
@@ -1116,6 +1131,21 @@
     }
   }
 
+  async function makeFemaFloodProvider() {
+    const Cesium = globalThis.Cesium;
+    if (!Cesium) return null;
+    const options = { layers: FEMA_FLOOD_LAYERS };
+    try {
+      if (Cesium.ArcGisMapServerImageryProvider?.fromUrl) {
+        return await Cesium.ArcGisMapServerImageryProvider.fromUrl(FEMA_FLOOD_ARCGIS_URL, options);
+      }
+      return new Cesium.ArcGisMapServerImageryProvider({ url: FEMA_FLOOD_ARCGIS_URL, ...options });
+    } catch (error) {
+      console.warn("FEMA flood overlay unavailable", error);
+      return null;
+    }
+  }
+
   async function toggleGlobeWeatherOverlay() {
     state.globeWeatherOverlay = !state.globeWeatherOverlay;
     if (state.globeWeatherOverlay && state.globeRenderer !== "cesium") {
@@ -1150,6 +1180,42 @@
     cesiumGlobe.weatherLayer = viewer.imageryLayers.addImageryProvider(provider);
     cesiumGlobe.weatherLayer.alpha = 0.58;
     cesiumGlobe.weatherLayer.brightness = 1.08;
+  }
+
+  async function toggleGlobeFloodOverlay() {
+    state.globeFloodOverlay = !state.globeFloodOverlay;
+    if (state.globeFloodOverlay && state.globeRenderer !== "cesium") {
+      setGlobeRenderer("cesium");
+    }
+    await updateCesiumFloodLayer();
+  }
+
+  async function updateCesiumFloodLayer() {
+    els.toggleGlobeFlood.classList.toggle("active", state.globeFloodOverlay);
+    els.toggleGlobeFlood.setAttribute("aria-pressed", state.globeFloodOverlay ? "true" : "false");
+
+    const viewer = cesiumGlobe.viewer;
+    if (!viewer || !globalThis.Cesium) return;
+
+    if (!state.globeFloodOverlay) {
+      if (cesiumGlobe.floodLayer) {
+        viewer.imageryLayers.remove(cesiumGlobe.floodLayer, false);
+        cesiumGlobe.floodLayer = null;
+      }
+      return;
+    }
+
+    if (cesiumGlobe.floodLayer) return;
+    const provider = await makeFemaFloodProvider();
+    if (!provider) {
+      state.globeFloodOverlay = false;
+      els.toggleGlobeFlood.classList.remove("active");
+      els.toggleGlobeFlood.setAttribute("aria-pressed", "false");
+      return;
+    }
+    cesiumGlobe.floodLayer = viewer.imageryLayers.addImageryProvider(provider);
+    cesiumGlobe.floodLayer.alpha = 0.72;
+    cesiumGlobe.floodLayer.brightness = 1.05;
   }
 
   function applyEarthView() {
@@ -1746,6 +1812,47 @@
       state.radarLayer.removeFrom(state.cameraMap);
     }
     els.toggleRadarOverlay.classList.toggle("active", state.radarOverlay);
+  }
+
+  function createFemaFloodLeafletLayer() {
+    const L = globalThis.L;
+    if (!L) return null;
+    const FloodGridLayer = L.GridLayer.extend({
+      createTile(coords, done) {
+        const tile = document.createElement("img");
+        const size = this.getTileSize();
+        const nw = this._map.unproject([coords.x * size.x, coords.y * size.y], coords.z);
+        const se = this._map.unproject([(coords.x + 1) * size.x, (coords.y + 1) * size.y], coords.z);
+        const url = new URL(`${FEMA_FLOOD_ARCGIS_URL}/export`);
+        url.searchParams.set("bbox", `${nw.lng},${se.lat},${se.lng},${nw.lat}`);
+        url.searchParams.set("bboxSR", "4326");
+        url.searchParams.set("imageSR", "3857");
+        url.searchParams.set("size", `${size.x},${size.y}`);
+        url.searchParams.set("format", "png32");
+        url.searchParams.set("transparent", "true");
+        url.searchParams.set("layers", FEMA_FLOOD_LAYERS);
+        url.searchParams.set("f", "image");
+        tile.alt = "FEMA flood hazard overlay";
+        tile.decoding = "async";
+        tile.src = url.toString();
+        tile.onload = () => done(null, tile);
+        tile.onerror = () => done(null, tile);
+        return tile;
+      },
+    });
+    return new FloodGridLayer({ opacity: 0.62, attribution: "FEMA NFHL" });
+  }
+
+  function toggleFloodOverlay() {
+    if (!state.cameraMap || !globalThis.L) return;
+    state.floodOverlay = !state.floodOverlay;
+    if (state.floodOverlay) {
+      state.floodLayer = state.floodLayer || createFemaFloodLeafletLayer();
+      state.floodLayer?.addTo(state.cameraMap);
+    } else if (state.floodLayer) {
+      state.floodLayer.removeFrom(state.cameraMap);
+    }
+    els.toggleFloodOverlay.classList.toggle("active", state.floodOverlay);
   }
 
   function renderCameraMap(options = {}) {
