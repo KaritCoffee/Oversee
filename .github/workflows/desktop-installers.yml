@@ -6,6 +6,9 @@ on:
     tags:
       - "v*"
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   build:
     name: Build ${{ matrix.platform }}
@@ -20,10 +23,16 @@ jobs:
             artifact: windows-installer
             paths: |
               src-tauri/target/release/bundle/nsis/*.exe
-          - platform: macos
+          - platform: macos-apple-silicon
             os: macos-latest
             bundles: dmg
-            artifact: macos-installer
+            artifact: macos-apple-silicon-installer
+            paths: |
+              src-tauri/target/release/bundle/dmg/*.dmg
+          - platform: macos-intel
+            os: macos-13
+            bundles: dmg
+            artifact: macos-intel-installer
             paths: |
               src-tauri/target/release/bundle/dmg/*.dmg
 
