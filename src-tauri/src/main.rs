@@ -90,7 +90,9 @@ fn node_runtime_path(app: &tauri::App) -> Option<PathBuf> {
   let resource_dir = app.path().resource_dir().ok()?;
   let candidates = [
     resource_dir.join("node.exe"),
+    resource_dir.join("node"),
     resource_dir.join("resources").join("node.exe"),
+    resource_dir.join("resources").join("node"),
   ];
 
   candidates.into_iter().find(|path| path.exists())

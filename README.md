@@ -73,6 +73,21 @@ Or use the helper script, which checks prerequisites first:
 
 Desktop builds require Rust/Cargo and Microsoft C++ Build Tools. See [docs/tauri-windows.md](./docs/tauri-windows.md) for setup notes.
 
+## Mac Desktop App
+
+macOS installers must be built on macOS. The repo includes a GitHub Actions workflow that can build a `.dmg` on a macOS runner:
+
+```powershell
+gh workflow run desktop-installers.yml
+```
+
+If you build locally on a Mac:
+
+```bash
+npm install
+npm run desktop:build -- --bundles dmg
+```
+
 ## Notes
 
 Satellite positions are generated from public CelesTrak element data with a lightweight browser-friendly approximation. They are good for visualization and situational context, not precision orbital analysis.
