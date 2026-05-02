@@ -32,6 +32,8 @@ const SOURCE_URLS = {
   nycTrafficCameras: "https://webcams.nyctmc.org/api/cameras",
   tflJamCams: "https://api.tfl.gov.uk/Place/Type/JamCam",
   nasaGibsWms: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
+  minnesota511Cameras: "https://mntg.carsprogram.org/cameras_v1/api/cameras",
+  missouriSnapshots: "https://traveler.modot.org/map/js/snapshot.json",
 };
 
 const GIBS_TEXTURES = {
@@ -55,6 +57,83 @@ const DYNAMIC_CAMERAS_BY_ID = new Map();
 const CELESTRAK_FALLBACK_GROUPS = ["visual", "stations", "starlink", "gps-ops", "gnss", "geo", "weather", "resource"];
 
 const ARCGIS_CAMERA_SOURCES = [
+  {
+    id: "oregon-tripcheck",
+    name: "Oregon TripCheck Cameras",
+    url: "https://services.arcgis.com/uUvqNMGPm7axC2dD/arcgis/rest/services/TripCheck_Cameras/FeatureServer/0/query",
+    country: "United States",
+    region: "Oregon",
+    category: "traffic",
+    nameFields: ["attributes_title", "attributes_route"],
+    areaFields: ["attributes_route"],
+    imageFields: ["attributes_filename"],
+    refreshSeconds: 180,
+    officialUrl: "https://tripcheck.com/",
+    tags: ["oregon", "tripcheck", "odot", "traffic"],
+  },
+  {
+    id: "illinois-travel-midwest",
+    name: "Illinois Travel Midwest Cameras",
+    url: "https://services2.arcgis.com/aIrBD8yn1TDTEXoz/arcgis/rest/services/TrafficCamerasTM_Public/FeatureServer/0/query",
+    country: "United States",
+    region: "Illinois",
+    category: "traffic",
+    nameFields: ["CameraLocation", "CameraDirection"],
+    areaFields: ["CameraLocation"],
+    imageFields: ["SnapShot"],
+    sourcePageFields: ["ImgPath"],
+    disabledStatusFields: ["TooOld"],
+    disabledStatusValues: ["true"],
+    refreshSeconds: 60,
+    officialUrl: "https://travelmidwest.com/",
+    tags: ["illinois", "travel-midwest", "traffic", "dot"],
+  },
+  {
+    id: "seattle-sdot",
+    name: "Seattle SDOT Traffic Cameras",
+    url: "https://services.arcgis.com/ZOyb2t4B0UYuYNYH/arcgis/rest/services/Traffic_Cameras_CDL/FeatureServer/0/query",
+    country: "United States",
+    region: "Washington",
+    category: "traffic",
+    nameFields: ["LOCATION", "NAME"],
+    areaFields: ["OWNERSHIP", "DISTRICT"],
+    imageFields: ["URL"],
+    requiredStatus: { field: "SERVSTAT", values: ["ACTV"] },
+    refreshSeconds: 60,
+    officialUrl: "https://www.seattle.gov/transportation/",
+    tags: ["seattle", "sdot", "washington", "traffic"],
+  },
+  {
+    id: "king-wsdot",
+    name: "King County / WSDOT Cameras",
+    url: "https://services.arcgis.com/Ej0PsM5Aw677QF1W/arcgis/rest/services/TRAFFICCAMERA_POINT_2029/FeatureServer/0/query",
+    country: "United States",
+    region: "Washington",
+    category: "traffic",
+    nameFields: ["Location", "Description"],
+    areaFields: ["CamRegion", "Owner", "Jurisdiction"],
+    imageFields: ["ImageURL"],
+    disabledStatusFields: ["CurrentStatus"],
+    disabledStatusValues: ["retired", "inactive", "disabled"],
+    refreshSeconds: 180,
+    officialUrl: "https://kingcounty.gov/",
+    tags: ["king-county", "wsdot", "washington", "traffic", "ferry"],
+  },
+  {
+    id: "maryland-chart",
+    name: "Maryland CHART Traffic Cameras",
+    url: "https://chartimap1.sha.maryland.gov/arcgis/rest/services/CHART/Cameras/MapServer/0/query",
+    country: "United States",
+    region: "Maryland",
+    category: "traffic",
+    nameFields: ["location"],
+    areaFields: ["location"],
+    streamFields: ["hlsurl"],
+    trustHls: true,
+    refreshSeconds: 60,
+    officialUrl: "https://chart.maryland.gov/",
+    tags: ["maryland", "mdot", "chart", "traffic", "hls"],
+  },
   {
     id: "ireland-tii",
     name: "Ireland TII Traffic Cameras",
@@ -376,6 +455,18 @@ function cameraAdapterSpecs(scope) {
       ttlMs: 2 * 60 * 1000,
       fetcher: fetchNycTrafficCameras,
     });
+    adapters.push({
+      key: "cameras:minnesota-511",
+      name: "Minnesota 511 Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: fetchMinnesota511Cameras,
+    });
+    adapters.push({
+      key: "cameras:missouri-modot",
+      name: "Missouri MoDOT Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: fetchMissouriSnapshotCameras,
+    });
   }
   if (scope === "world") {
     adapters.push({
@@ -514,6 +605,106 @@ async function fetchTflJamCams() {
     .filter(Boolean);
 }
 
+async function fetchMinnesota511Cameras() {
+  const records = await fetchJson(SOURCE_URLS.minnesota511Cameras, {
+    timeoutMs: 18000,
+    headers: {
+      Origin: "https://511mn.org",
+      Referer: "https://511mn.org/",
+    },
+  });
+  return (Array.isArray(records) ? records : [])
+    .flatMap((record) => {
+      const lat = Number(record.location?.latitude);
+      const lng = Number(record.location?.longitude);
+      if (!record.public || !Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+      const views = Array.isArray(record.views) && record.views.length ? record.views : [{ name: record.name }];
+      return views
+        .map((view, index) => {
+          const primaryUrl = normalizeUrl(view.url);
+          const streamUrl = /\.m3u8(?:$|\?)/i.test(primaryUrl) ? primaryUrl : "";
+          const imageUrl = normalizeUrl(view.videoPreviewUrl) || (!streamUrl ? primaryUrl : "");
+          if (!streamUrl && !imageUrl) return null;
+          const name = cleanCameraText(view.name || record.name || "Minnesota 511 camera");
+          const route = cleanCameraText(record.location?.routeId || "");
+          const city = cleanCameraText(record.location?.cityReference || "");
+          return {
+            id: `mn511-${record.id}-${index}`,
+            dynamic: true,
+            type: "camera",
+            name,
+            shortName: shortCameraName(name),
+            area: city || route || "Minnesota",
+            region: "Minnesota",
+            county: city || route || "Minnesota",
+            country: "United States",
+            category: "traffic",
+            media: streamUrl ? "video" : "still",
+            status: "Online",
+            freshness: 1,
+            tags: ["minnesota", "mn511", "mndot", "traffic", route, city].filter(Boolean),
+            sourceId: "mn511",
+            sourceName: "Minnesota 511 Cameras",
+            sourceUrl: SOURCE_URLS.minnesota511Cameras,
+            officialUrl: "https://511mn.org/",
+            sourcePageUrl: "https://511mn.org/",
+            lat,
+            lng,
+            viewerType: streamUrl ? "hls" : "image",
+            capability: streamUrl ? "stream" : "snapshot",
+            capabilityLabel: streamUrl ? "Live Stream" : "Current Still",
+            previewUrl: imageUrl,
+            imageUrl,
+            streamUrl,
+            refreshSeconds: 60,
+          };
+        })
+        .filter(Boolean);
+    });
+}
+
+async function fetchMissouriSnapshotCameras() {
+  const data = await fetchJson(SOURCE_URLS.missouriSnapshots, { timeoutMs: 12000 });
+  return (data.cameras || [])
+    .map((camera) => {
+      const lat = Number(camera.location?.y);
+      const lng = Number(camera.location?.x);
+      const imageUrl = normalizeModotUrl(camera.url);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !imageUrl) return null;
+      const name = cleanCameraText(camera.caption || "Missouri traffic camera");
+      return {
+        id: `modot-${slugify(camera.id || name)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area: "Missouri",
+        region: "Missouri",
+        county: "Missouri",
+        country: "United States",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 2,
+        tags: ["missouri", "modot", "traffic"],
+        sourceId: "modot",
+        sourceName: "Missouri MoDOT Cameras",
+        sourceUrl: SOURCE_URLS.missouriSnapshots,
+        officialUrl: "https://traveler.modot.org/map/",
+        sourcePageUrl: "https://traveler.modot.org/map/",
+        lat,
+        lng,
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 120,
+      };
+    })
+    .filter(Boolean);
+}
+
 async function fetchCaltransCameras() {
   const results = await Promise.allSettled(
     CALTRANS_DISTRICTS.map((district) => fetchJson(caltransDistrictUrl(district), { timeoutMs: 14000 }))
@@ -581,22 +772,38 @@ function caltransDistrictUrl(district) {
 }
 
 async function fetchArcgisCameras(source) {
-  const url = new URL(source.url);
-  url.searchParams.set("where", "1=1");
-  url.searchParams.set("outFields", "*");
-  url.searchParams.set("returnGeometry", "true");
-  url.searchParams.set("outSR", "4326");
-  url.searchParams.set("f", "json");
-  const data = await fetchJson(url.href, { timeoutMs: 18000 });
-  return (data.features || [])
+  const features = [];
+  const pageSize = source.pageSize || 1000;
+  const maxRecords = source.maxRecords || 8000;
+  for (let offset = 0; offset < maxRecords; offset += pageSize) {
+    const url = new URL(source.url);
+    url.searchParams.set("where", "1=1");
+    url.searchParams.set("outFields", "*");
+    url.searchParams.set("returnGeometry", "true");
+    url.searchParams.set("outSR", "4326");
+    url.searchParams.set("resultRecordCount", String(pageSize));
+    url.searchParams.set("resultOffset", String(offset));
+    url.searchParams.set("f", "json");
+    const data = await fetchJson(url.href, { timeoutMs: 18000 });
+    const page = data.features || [];
+    features.push(...page);
+    if (!data.exceededTransferLimit && page.length < pageSize) break;
+  }
+
+  return features
     .map((feature) => mapArcgisCamera(feature, source))
     .filter(Boolean);
 }
 
 function mapArcgisCamera(feature, source) {
   const attributes = feature?.attributes || {};
-  const lat = Number(attributes.LATITUDE ?? attributes.Latitude ?? attributes.latitude ?? feature?.geometry?.y);
-  const lng = Number(attributes.LONGITUDE ?? attributes.Longitude ?? attributes.longitude ?? feature?.geometry?.x);
+  if (!isArcgisCameraEnabled(attributes, source)) return null;
+  const lat = validLat(attributes.LATITUDE ?? attributes.Latitude ?? attributes.latitude ?? attributes.Lat ?? attributes.lat)
+    ? Number(attributes.LATITUDE ?? attributes.Latitude ?? attributes.latitude ?? attributes.Lat ?? attributes.lat)
+    : Number(feature?.geometry?.y);
+  const lng = validLng(attributes.LONGITUDE ?? attributes.Longitude ?? attributes.longitude ?? attributes.Lon ?? attributes.lng)
+    ? Number(attributes.LONGITUDE ?? attributes.Longitude ?? attributes.longitude ?? attributes.Lon ?? attributes.lng)
+    : Number(feature?.geometry?.x);
   const imageUrl = normalizeUrl(firstFieldValue(attributes, source.imageFields));
   const streamUrl = source.trustHls ? normalizeUrl(firstFieldValue(attributes, source.streamFields)) : "";
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!imageUrl && !streamUrl)) return null;
@@ -637,7 +844,7 @@ function mapArcgisCamera(feature, source) {
     sourceName: source.name,
     sourceUrl: source.url,
     officialUrl: source.officialUrl || source.url,
-    sourcePageUrl: source.sourcePageUrl || source.officialUrl || source.url,
+    sourcePageUrl: normalizeUrl(firstFieldValue(attributes, source.sourcePageFields)) || source.sourcePageUrl || source.officialUrl || source.url,
     lat,
     lng,
     viewerType: streamUrl ? "hls" : "image",
@@ -648,6 +855,32 @@ function mapArcgisCamera(feature, source) {
     streamUrl,
     refreshSeconds: source.refreshSeconds || 180,
   };
+}
+
+function isArcgisCameraEnabled(attributes, source) {
+  if (source.requiredStatus?.field) {
+    const value = String(attributes[source.requiredStatus.field] ?? "").trim().toLowerCase();
+    const allowed = (source.requiredStatus.values || []).map((item) => String(item).toLowerCase());
+    if (allowed.length && !allowed.includes(value)) return false;
+  }
+  const disabledValues = (source.disabledStatusValues || []).map((item) => String(item).toLowerCase());
+  if (disabledValues.length) {
+    for (const field of source.disabledStatusFields || []) {
+      const value = String(attributes[field] ?? "").trim().toLowerCase();
+      if (disabledValues.includes(value)) return false;
+    }
+  }
+  return true;
+}
+
+function validLat(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= -90 && number <= 90;
+}
+
+function validLng(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= -180 && number <= 180;
 }
 
 function firstFieldValue(attributes, fields = []) {
@@ -662,6 +895,13 @@ function normalizeUrl(value) {
   const text = cleanCameraText(value);
   if (!/^https?:\/\//i.test(text)) return "";
   return text;
+}
+
+function normalizeModotUrl(value) {
+  const text = cleanCameraText(value);
+  if (!text) return "";
+  if (/^https?:\/\//i.test(text)) return text;
+  return new URL(text, "https://traveler.modot.org/").href;
 }
 
 function cleanCameraText(value) {
