@@ -1973,13 +1973,15 @@
       return [
         ["Callsign", item.callsign || "Unknown"],
         ["ICAO24", item.icao24 || item.id?.replace(/^flight-/, "") || "unknown"],
+        ["Registration", item.registration || "unknown"],
+        ["Aircraft", item.aircraftType || "unknown"],
         ["Altitude", item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "unknown"],
         ["Velocity", item.velocity ? `${Math.round(item.velocity)} m/s` : "unknown"],
         ["Heading", Number.isFinite(Number(item.heading)) ? `${Math.round(item.heading)} deg` : "unknown"],
         ["Country", item.country || "unknown"],
         ["Position", formatLatLng(item.lat, item.lng)],
         ["Trail", getTrackPoints(type, item).length > 1 ? `${getTrackPoints(type, item).length} points` : "heading fallback"],
-        ["Source", "OpenSky"],
+        ["Source", item.source || "Aircraft feed"],
       ];
     }
     if (type === "quake") {
@@ -2010,7 +2012,7 @@
   function assetSubtitle(type, item) {
     if (type === "camera") return `${item.area || "Unknown"} | ${item.region || item.country || "Global"} | ${item.capabilityLabel || item.media || "Camera"}`;
     if (type === "satellite") return `${item.objectType || "Satellite"} | ${item.altitudeKm ? `${Math.round(item.altitudeKm)} km` : "orbit"} | CelesTrak`;
-    if (type === "flight") return `${item.country || "Unknown"} | ${item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "altitude unknown"} | OpenSky`;
+    if (type === "flight") return `${item.registration || item.country || "Unknown"} | ${item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "altitude unknown"} | ${item.source || "Aircraft feed"}`;
     if (type === "quake") return `M${item.magnitude?.toFixed?.(1) || "?"} | ${item.location || "USGS event"}`;
     if (type === "alert") return `${item.event || "Alert"} | ${item.areaSummary || item.region || item.area || "NWS"}`;
     return item.source || "Public signal";
@@ -2018,7 +2020,7 @@
 
   function infoSummary(type, item) {
     if (type === "satellite") return "Approximate live position from current public element data.";
-    if (type === "flight") return "Public aircraft state from OpenSky when available.";
+    if (type === "flight") return `Public aircraft state from ${item.source || "available public aircraft feed"}.`;
     if (type === "quake") return "USGS seismic event from the all-day GeoJSON feed.";
     if (type === "alert") return "Official public weather alert from the National Weather Service.";
     return assetSubtitle(type, item);

@@ -27,6 +27,7 @@ const SOURCE_URLS = {
   celestrakActive: "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json",
   celestrakVisual: "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=json",
   openskyAll: "https://opensky-network.org/api/states/all",
+  adsbLolPoint: "https://api.adsb.lol/v2/point",
   usgsQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
   nwsAlerts: "https://api.weather.gov/alerts/active",
   nycTrafficCameras: "https://webcams.nyctmc.org/api/cameras",
@@ -470,7 +471,7 @@ async function buildIntelSnapshot(scope) {
   const sourceHealth = [
     ...cameraSet.health,
     healthFromResult("CelesTrak GP", satelliteResult, satellites.length),
-    healthFromResult("OpenSky states", flightResult, flights.length),
+    healthFromResult("Aircraft states", flightResult, flights.length),
     healthFromResult("USGS quakes", quakeResult, quakes.length),
     healthFromResult("NWS alerts", alertResult, alerts.length),
   ];
@@ -1858,7 +1859,13 @@ async function fetchFlights(scope) {
   const headers = {};
   if (process.env.OPENSKY_TOKEN) headers.Authorization = `Bearer ${process.env.OPENSKY_TOKEN}`;
 
-  const data = await fetchJson(url.href, { headers, timeoutMs: 10000 });
+  let data;
+  try {
+    data = await fetchJson(url.href, { headers, timeoutMs: 10000 });
+  } catch (error) {
+    if (!/429|Too many requests/i.test(error.message)) throw error;
+    return fetchAdsbLolFlights(scope);
+  }
   const states = Array.isArray(data.states) ? data.states : [];
   const maxStates = scope === "world" ? 5000 : scope === "us" ? 2200 : 900;
   return deterministicSample(states, maxStates, (state) => state[0])
@@ -1885,6 +1892,89 @@ async function fetchFlights(scope) {
       };
     })
     .filter(Boolean);
+}
+
+async function fetchAdsbLolFlights(scope) {
+  const points = flightFallbackPoints(scope);
+  const results = await Promise.allSettled(
+    points.map((point) =>
+      fetchJson(`${SOURCE_URLS.adsbLolPoint}/${point.lat}/${point.lng}/${point.radius}`, {
+        timeoutMs: 12000,
+        headers: { Accept: "application/json" },
+      })
+    )
+  );
+  const byHex = new Map();
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    for (const aircraft of result.value.ac || []) {
+      const mapped = mapAdsbLolAircraft(aircraft);
+      if (mapped && !byHex.has(mapped.icao24)) byHex.set(mapped.icao24, mapped);
+    }
+  }
+  if (!byHex.size) throw new Error("OpenSky rate-limited and ADS-B fallback returned no aircraft");
+  const max = scope === "world" ? 1800 : scope === "us" ? 1200 : 600;
+  return deterministicSample([...byHex.values()], max, (flight) => flight.icao24);
+}
+
+function flightFallbackPoints(scope) {
+  if (scope === "us") {
+    return [
+      { lat: 39, lng: -98, radius: 250 },
+      { lat: 34, lng: -118, radius: 250 },
+      { lat: 40.7, lng: -74, radius: 250 },
+      { lat: 33.7, lng: -84.4, radius: 250 },
+      { lat: 41.9, lng: -87.6, radius: 250 },
+      { lat: 47.6, lng: -122.3, radius: 250 },
+    ];
+  }
+  if (scope === "west" || scope === "oregon") {
+    return [
+      { lat: 45.5, lng: -122.7, radius: 250 },
+      { lat: 37.6, lng: -122.4, radius: 250 },
+      { lat: 34, lng: -118, radius: 250 },
+      { lat: 40.8, lng: -111.9, radius: 250 },
+    ];
+  }
+  return [
+    { lat: 39, lng: -98, radius: 250 },
+    { lat: 34, lng: -118, radius: 250 },
+    { lat: 40.7, lng: -74, radius: 250 },
+    { lat: 52, lng: 13, radius: 250 },
+    { lat: 51.5, lng: -0.1, radius: 250 },
+    { lat: 25.2, lng: 55.3, radius: 250 },
+    { lat: 35.7, lng: 139.7, radius: 250 },
+    { lat: -33.9, lng: 151.2, radius: 250 },
+  ];
+}
+
+function mapAdsbLolAircraft(aircraft) {
+  const lat = Number(aircraft.lat);
+  const lng = Number(aircraft.lon);
+  const icao24 = String(aircraft.hex || "").trim();
+  if (!icao24 || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const callsign = cleanCameraText(aircraft.flight || aircraft.r || icao24);
+  const altitudeFeet = Number(aircraft.alt_geom || aircraft.alt_baro || 0);
+  const altitudeMeters = Number.isFinite(altitudeFeet) ? altitudeFeet * 0.3048 : 0;
+  const groundspeedKnots = Number(aircraft.gs || 0);
+  return {
+    id: `flight-${icao24}`,
+    icao24,
+    type: "flight",
+    name: callsign,
+    callsign,
+    registration: cleanCameraText(aircraft.r || ""),
+    aircraftType: cleanCameraText(aircraft.t || ""),
+    country: "ADS-B",
+    lat,
+    lng,
+    altitudeMeters,
+    velocity: Number.isFinite(groundspeedKnots) ? groundspeedKnots * 0.514444 : 0,
+    heading: Number(aircraft.track ?? aircraft.true_heading ?? aircraft.mag_heading ?? 0),
+    onGround: String(aircraft.alt_baro).toLowerCase() === "ground",
+    time: new Date(Date.now() - Math.max(0, Number(aircraft.seen_pos || aircraft.seen || 0)) * 1000).toISOString(),
+    source: "ADSB.lol",
+  };
 }
 
 async function fetchQuakes() {
