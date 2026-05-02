@@ -30,8 +30,11 @@ const SOURCE_URLS = {
   openskyAll: "https://opensky-network.org/api/states/all",
   adsbLolPoint: "https://api.adsb.lol/v2/point",
   usgsQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
+  usgsSignificantQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_month.geojson",
   nwsAlerts: "https://api.weather.gov/alerts/active",
   nasaFirmsArea: "https://firms.modaps.eosdis.nasa.gov/api/area/csv",
+  egpIncidents: "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/EGP_Active_Incidents_Prod_Public_View/FeatureServer/0/query",
+  egpPerimeters: "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query",
   nycTrafficCameras: "https://webcams.nyctmc.org/api/cameras",
   tflJamCams: "https://api.tfl.gov.uk/Place/Type/JamCam",
   nasaGibsWms: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
@@ -454,13 +457,15 @@ listenOnPreferredPort(0);
 
 async function buildIntelSnapshot(scope) {
   const bounds = SCOPE_BOUNDS[scope];
-  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, fireResult] = await Promise.all([
+  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, fireResult, egpIncidentResult, egpPerimeterResult] = await Promise.all([
     buildCameraSet(scope),
     getCached("satellites", 10 * 60 * 1000, () => fetchSatellites(scope)),
     getCached(`flights:${scope}`, 45 * 1000, () => fetchFlights(scope)),
     getCached("quakes", 60 * 1000, () => fetchQuakes()),
     getCached(`alerts:${scope}`, 90 * 1000, () => fetchAlerts(scope)),
     getCached(`fires:${scope}`, 5 * 60 * 1000, () => fetchFires(scope)),
+    getCached("egp:incidents", 5 * 60 * 1000, () => fetchEgpIncidents()),
+    getCached("egp:perimeters", 10 * 60 * 1000, () => fetchEgpPerimeters()),
   ]);
 
   const cameras = cameraSet.data;
@@ -468,7 +473,7 @@ async function buildIntelSnapshot(scope) {
   const flights = filterGeoItems(flightResult.data, bounds).slice(0, bounds.flightLimit || bounds.limit);
   const quakes = filterGeoItems(quakeResult.data, bounds).slice(0, bounds.quakeLimit || bounds.limit);
   const alerts = filterGeoItems(alertResult.data, bounds).slice(0, 80);
-  const fires = filterGeoItems(fireResult.data, bounds).slice(0, bounds.fireLimit || 1800);
+  const fires = filterGeoItems([...(fireResult.data || []), ...(egpIncidentResult.data || []), ...(egpPerimeterResult.data || [])], bounds).slice(0, bounds.fireLimit || 1800);
   const events = buildEvents({ cameras, satellites, flights, quakes, alerts, fires });
   const regions = buildRegions({ cameras, satellites, flights, quakes, alerts, fires });
   const severity = buildSeverity({ alerts, quakes, fires });
@@ -478,7 +483,9 @@ async function buildIntelSnapshot(scope) {
     healthFromResult("Aircraft states", flightResult, flights.length),
     healthFromResult("USGS quakes", quakeResult, quakes.length),
     healthFromResult("NWS alerts", alertResult, alerts.length),
-    healthFromResult("NASA FIRMS fires", fireResult, fires.length),
+    healthFromResult("NASA FIRMS fires", fireResult, filterGeoItems(fireResult.data || [], bounds).length),
+    healthFromResult("EGP WildFireSA incidents", egpIncidentResult, filterGeoItems(egpIncidentResult.data || [], bounds).length),
+    healthFromResult("WFIGS current perimeters", egpPerimeterResult, filterGeoItems(egpPerimeterResult.data || [], bounds).length),
   ];
   const videoFeeds = cameras.filter((camera) => camera.capability === "player" || camera.capability === "stream").length;
 
@@ -1985,8 +1992,15 @@ function mapAdsbLolAircraft(aircraft) {
 }
 
 async function fetchQuakes() {
-  const data = await fetchJson(SOURCE_URLS.usgsQuakes, { timeoutMs: 10000 });
-  return (data.features || [])
+  const [allDay, significant] = await Promise.all([
+    fetchJson(SOURCE_URLS.usgsQuakes, { timeoutMs: 10000 }),
+    fetchJson(SOURCE_URLS.usgsSignificantQuakes, { timeoutMs: 10000 }).catch(() => ({ features: [] })),
+  ]);
+  const featuresById = new Map();
+  for (const feature of [...(allDay.features || []), ...(significant.features || [])]) {
+    featuresById.set(feature.id || feature.properties?.code || JSON.stringify(feature.geometry?.coordinates), feature);
+  }
+  const quakes = [...featuresById.values()]
     .map((feature) => {
       const [lng, lat, depthKm] = feature.geometry?.coordinates || [];
       const magnitude = Number(feature.properties?.mag || 0);
@@ -2005,11 +2019,53 @@ async function fetchQuakes() {
         displayColor: quakeColor(magnitude),
         time: feature.properties?.time ? new Date(feature.properties.time).toISOString() : new Date().toISOString(),
         source: "USGS",
+        detailUrl: feature.properties?.detail || "",
         url: feature.properties?.url,
       };
     })
     .filter(Boolean)
     .sort((left, right) => (right.magnitude || 0) - (left.magnitude || 0));
+  await enrichQuakesWithShakeMap(quakes.filter((quake) => quake.magnitude >= 4).slice(0, 12));
+  return quakes;
+}
+
+async function enrichQuakesWithShakeMap(quakes) {
+  await Promise.allSettled(quakes.map(async (quake) => {
+    if (!quake.detailUrl) return;
+    const detail = await fetchJson(quake.detailUrl, { timeoutMs: 7000 });
+    const products = detail.properties?.products?.shakemap || [];
+    const product = products[0];
+    if (!product) return;
+    const props = product.properties || {};
+    const contents = product.contents || {};
+    const overlay = contents["download/intensity_overlay.png"]?.url || "";
+    const intensityMap = contents["download/intensity.jpg"]?.url || contents["download/intensity.pdf"]?.url || "";
+    const bounds = {
+      west: Number(props["minimum-longitude"]),
+      south: Number(props["minimum-latitude"]),
+      east: Number(props["maximum-longitude"]),
+      north: Number(props["maximum-latitude"]),
+    };
+    quake.shakeMap = {
+      overlay,
+      intensityMap,
+      maxMmi: Number(props.maxmmi || props["maxmmi-grid"] || 0),
+      status: props["map-status"] || props["review-status"] || "available",
+      version: props.version || "",
+      bounds,
+      url: product.contents?.["download/intensity.jpg"]?.url || quake.url,
+    };
+    if ([bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite)) {
+      quake.geometryRings = [[
+        { lat: bounds.south, lng: bounds.west },
+        { lat: bounds.south, lng: bounds.east },
+        { lat: bounds.north, lng: bounds.east },
+        { lat: bounds.north, lng: bounds.west },
+        { lat: bounds.south, lng: bounds.west },
+      ]];
+      quake.radiusKm = Math.max(80, Math.min(700, distanceBetweenLatLng(bounds.south, bounds.west, bounds.north, bounds.east) / 2));
+    }
+  }));
 }
 
 async function fetchFires(scope) {
@@ -2075,6 +2131,107 @@ function firmsTimestamp(date, time) {
   const cleanDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? date : new Date().toISOString().slice(0, 10);
   const padded = String(time || "0").padStart(4, "0").slice(0, 4);
   return new Date(`${cleanDate}T${padded.slice(0, 2)}:${padded.slice(2, 4)}:00Z`).toISOString();
+}
+
+async function fetchEgpIncidents() {
+  const url = new URL(SOURCE_URLS.egpIncidents);
+  url.searchParams.set("where", "1=1");
+  url.searchParams.set("outFields", "*");
+  url.searchParams.set("returnGeometry", "true");
+  url.searchParams.set("f", "geojson");
+  url.searchParams.set("resultRecordCount", "1000");
+  const data = await fetchJson(url.href, { timeoutMs: 12000 });
+  return (data.features || []).map(mapEgpIncidentFeature).filter(Boolean);
+}
+
+async function fetchEgpPerimeters() {
+  const url = new URL(SOURCE_URLS.egpPerimeters);
+  url.searchParams.set("where", "poly_IsVisible='Yes'");
+  url.searchParams.set("outFields", "*");
+  url.searchParams.set("returnGeometry", "true");
+  url.searchParams.set("f", "geojson");
+  url.searchParams.set("resultRecordCount", "500");
+  const data = await fetchJson(url.href, { timeoutMs: 16000 });
+  return (data.features || []).map(mapEgpPerimeterFeature).filter(Boolean);
+}
+
+function mapEgpIncidentFeature(feature, index) {
+  const props = feature.properties || {};
+  const [lng, lat] = feature.geometry?.coordinates || [];
+  if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return null;
+  const acres = Number(props.DailyAcres || props.CalculatedAcres || props.IncidentSize || props.FinalAcres || 0);
+  const contained = Number(props.PercentContained);
+  const name = cleanCameraText(props.Name || props.IncidentName || props.UniqueFireIdentifier || "Active wildfire incident");
+  return {
+    id: `egp-incident-${props.IrwinID || props.UniqueFireIdentifier || props.OBJECTID || index}`,
+    type: "fire",
+    subtype: "incident",
+    name,
+    title: `WildFireSA incident: ${name}`,
+    lat: Number(lat),
+    lng: Number(lng),
+    acres,
+    frp: 0,
+    confidence: Number.isFinite(contained) ? `${contained}% contained` : "incident",
+    containment: Number.isFinite(contained) ? contained : null,
+    county: props.County || props.POOCounty || "",
+    state: stateNameFromCode(props.POOState),
+    gacc: props.GACC || "",
+    cause: cleanCameraText(props.Cause || props.FireCause || ""),
+    personnel: Number(props.TotalIncidentPersonnel || 0),
+    severity: acres >= 10000 || contained < 30 ? "critical" : acres >= 1000 ? "high" : acres >= 100 ? "medium" : "low",
+    displayColor: acres >= 1000 ? "#ff4e57" : "#ff9f1c",
+    time: parseArcgisDate(props.Sit209_Report_Date || props.Last_Time_Information_Modified || props.Discovery_Date || props.FireDiscoveryDateTime || props.CreatedOnDateTime_dt),
+    source: "EGP WildFireSA",
+    sourceUrl: "https://egp.wildfire.gov/maps/",
+    url: "https://egp.wildfire.gov/maps/",
+  };
+}
+
+function mapEgpPerimeterFeature(feature, index) {
+  const props = feature.properties || {};
+  const geometryRings = alertGeometryRings(feature.geometry);
+  const center = centroidFromFeature(feature);
+  if (!center || !geometryRings.length) return null;
+  const acres = Number(props.poly_GISAcres || props.poly_Acres_AutoCalc || props.attr_FinalAcres || props.attr_IncidentSize || 0);
+  const name = cleanCameraText(props.poly_IncidentName || props.attr_IncidentName || "Current fire perimeter");
+  return {
+    id: `egp-perimeter-${props.GlobalID || props.poly_SourceGlobalID || props.OBJECTID || index}`,
+    type: "fire",
+    subtype: "perimeter",
+    name,
+    title: `Current fire perimeter: ${name}`,
+    lat: center.lat,
+    lng: center.lng,
+    acres,
+    frp: 0,
+    confidence: "perimeter",
+    geometryRings,
+    radiusKm: Math.max(30, Math.min(400, Math.sqrt(Math.max(acres, 1)) * 1.3)),
+    county: props.attr_POOCounty || "",
+    state: stateNameFromCode(props.attr_POOState),
+    gacc: props.attr_GACC || "",
+    cause: cleanCameraText(props.attr_FireCause || props.attr_FireCauseGeneral || ""),
+    severity: acres >= 10000 ? "critical" : acres >= 1000 ? "high" : acres >= 100 ? "medium" : "low",
+    displayColor: acres >= 1000 ? "#ff4e57" : "#ffb02e",
+    time: parseArcgisDate(props.poly_DateCurrent || props.poly_PolygonDateTime || props.attr_ModifiedOnDateTime_dt),
+    source: "WFIGS Current Perimeters",
+    sourceUrl: "https://egp.wildfire.gov/maps/",
+    url: "https://egp.wildfire.gov/maps/",
+  };
+}
+
+function parseArcgisDate(value) {
+  if (Number.isFinite(Number(value))) return new Date(Number(value)).toISOString();
+  const text = cleanCameraText(value);
+  if (!text) return new Date().toISOString();
+  const normalized = text.replace(/(\d{2}):(\d{2})(\d{2})\sUTC$/i, "$1:$2:$3Z").replace(/\sUTC$/i, "Z").replace(" ", "T");
+  const date = new Date(normalized);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : new Date().toISOString();
+}
+
+function stateNameFromCode(value) {
+  return cleanCameraText(value).replace(/^US-/, "");
 }
 
 async function fetchAlerts(scope) {
@@ -2387,6 +2544,17 @@ function inBounds(item, bounds) {
     item.lng >= bounds.lomin &&
     item.lng <= bounds.lomax
   );
+}
+
+function distanceBetweenLatLng(latA, lngA, latB, lngB) {
+  const radiusKm = 6371;
+  const toRad = (value) => (Number(value) * Math.PI) / 180;
+  const dLat = toRad(latB) - toRad(latA);
+  const dLng = toRad(lngB) - toRad(lngA);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(latA)) * Math.cos(toRad(latB)) * Math.sin(dLng / 2) ** 2;
+  return radiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function normalizeScope(value) {

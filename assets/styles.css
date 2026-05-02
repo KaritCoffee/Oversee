@@ -305,6 +305,14 @@ a {
   background: rgba(0, 136, 255, 0.22);
 }
 
+.icon-button.active,
+.orbit-toggle[aria-pressed="true"] {
+  border-color: rgba(24, 240, 160, 0.72);
+  color: #fff;
+  background: rgba(0, 132, 88, 0.32);
+  box-shadow: inset 0 0 18px rgba(24, 240, 160, 0.14), 0 0 18px rgba(24, 240, 160, 0.12);
+}
+
 .clock-block {
   flex-direction: column;
   align-items: flex-start;
@@ -579,6 +587,22 @@ a {
   border-color: rgba(255, 78, 87, 0.78);
   background: rgba(92, 18, 27, 0.86);
   transform: translateY(-1px);
+}
+
+.alert-drawer-toggle.soft-ping {
+  animation: alertSoftPing 3.2s ease-out;
+}
+
+@keyframes alertSoftPing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 78, 87, 0.42), 0 0 18px rgba(255, 78, 87, 0.26);
+  }
+  45% {
+    box-shadow: 0 0 0 14px rgba(255, 78, 87, 0), 0 0 26px rgba(255, 78, 87, 0.32);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 78, 87, 0), 0 0 22px rgba(255, 78, 87, 0.16);
+  }
 }
 
 .alert-drawer-toggle svg {
@@ -1366,6 +1390,24 @@ a {
   grid-column: 2;
   justify-self: start;
   margin-top: 8px;
+}
+
+.shakemap-watch {
+  grid-template-columns: 1fr;
+}
+
+.shakemap-watch img {
+  width: min(100%, 720px);
+  max-height: 360px;
+  margin-top: 14px;
+  border: 1px solid rgba(115, 168, 201, 0.24);
+  border-radius: 14px;
+  object-fit: contain;
+  background: #02070b;
+}
+
+.shakemap-watch .text-button {
+  grid-column: 1;
 }
 
 .watch-detail {

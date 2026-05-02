@@ -18,6 +18,7 @@
   const EARTH_VIEWS = [
     { id: "ops", label: "Ops" },
     { id: "nasa", label: "NASA" },
+    { id: "topo", label: "USGS Topo" },
   ];
 
   const GLOBE_RENDERERS = [
@@ -28,6 +29,8 @@
   const NOAA_RADAR_ARCGIS_URL = "https://mapservices.weather.noaa.gov/eventdriven/rest/services/radar/radar_base_reflectivity_time/ImageServer";
   const FEMA_FLOOD_ARCGIS_URL = "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer";
   const FEMA_FLOOD_LAYERS = "show:27,28";
+  const WORLD_IMAGERY_ARCGIS_URL = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer";
+  const USGS_TOPO_ARCGIS_URL = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer";
 
   const LAYERS = [
     { id: "cameras", label: "Cameras", color: "#19e2ff", icon: "cctv" },
@@ -80,7 +83,17 @@
     {
       name: "USGS Earthquakes",
       status: "Free public feed",
-      detail: "All-day GeoJSON feed powers seismic events and the recent-signals queue.",
+      detail: "All-day GeoJSON feed powers seismic events; significant quakes are enriched with ShakeMap impact metadata when available.",
+    },
+    {
+      name: "EGP WildFireSA / WFIGS",
+      status: "Free public wildfire layers",
+      detail: "National fire situational awareness adds active incidents and current interagency perimeter polygons to the Fires layer.",
+    },
+    {
+      name: "USGS National Map Topo",
+      status: "Free public basemap",
+      detail: "USGS Topo can be selected as the Cesium globe basemap for a more map-like planning view without an API key.",
     },
     {
       name: "National Weather Service",
@@ -141,6 +154,9 @@
     floodOverlay: false,
     globeWeatherOverlay: false,
     globeFloodOverlay: false,
+    idleSpin: false,
+    seenAlertIds: null,
+    audioContext: null,
     cameraRenderer: null,
     hls: null,
     stillRefreshTimer: null,
@@ -174,6 +190,7 @@
     ready: false,
     loading: false,
     failed: false,
+    baseLayer: null,
     sources: {},
     selectionSource: null,
   };
@@ -188,6 +205,7 @@
     refreshAll: document.getElementById("refreshAll"),
     cycleSensorMode: document.getElementById("cycleSensorMode"),
     focusHome: document.getElementById("focusHome"),
+    toggleIdleSpin: document.getElementById("toggleIdleSpin"),
     openSourcePanel: document.getElementById("openSourcePanel"),
     closeSourcePanel: document.getElementById("closeSourcePanel"),
     sourceDrawer: document.getElementById("sourceDrawer"),
@@ -281,6 +299,7 @@
 
     els.refreshAll.addEventListener("click", () => refreshSnapshot({ force: true }));
     els.focusHome.addEventListener("click", () => setScope("us"));
+    els.toggleIdleSpin.addEventListener("click", toggleIdleSpin);
     els.cycleSensorMode.addEventListener("click", cycleSensorMode);
     els.openSourcePanel.addEventListener("click", () => toggleSourceDrawer(true));
     els.closeSourcePanel.addEventListener("click", () => toggleSourceDrawer(false));
@@ -383,6 +402,8 @@
         applySearch(searchTerm.dataset.searchTerm || "");
       }
     });
+
+    document.addEventListener("pointerdown", primeAlertAudio, { once: true, passive: true });
   }
 
   function applySearch(term) {
@@ -501,6 +522,57 @@
     els.openAlertDrawer.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
   }
 
+  function toggleIdleSpin() {
+    state.idleSpin = !state.idleSpin;
+    els.toggleIdleSpin.classList.toggle("active", state.idleSpin);
+    els.toggleIdleSpin.setAttribute("aria-pressed", state.idleSpin ? "true" : "false");
+  }
+
+  function primeAlertAudio() {
+    try {
+      const AudioContext = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!AudioContext || state.audioContext) return;
+      state.audioContext = new AudioContext();
+      state.audioContext.resume?.();
+    } catch {
+      state.audioContext = null;
+    }
+  }
+
+  function playAlertChime() {
+    try {
+      primeAlertAudio();
+      const context = state.audioContext;
+      if (!context) return;
+      context.resume?.();
+      const now = context.currentTime;
+      [0, 0.115].forEach((offset, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(index ? 660 : 520, now + offset);
+        gain.gain.setValueAtTime(0.0001, now + offset);
+        gain.gain.exponentialRampToValueAtTime(0.045, now + offset + 0.018);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.32);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(now + offset);
+        oscillator.stop(now + offset + 0.34);
+      });
+    } catch {
+      // Audio is a nicety; never let browser audio policy interrupt data refresh.
+    }
+  }
+
+  function cueNewAlert(newCount) {
+    if (!newCount) return;
+    els.openAlertDrawer.classList.remove("soft-ping");
+    void els.openAlertDrawer.offsetWidth;
+    els.openAlertDrawer.classList.add("soft-ping");
+    window.setTimeout(() => els.openAlertDrawer.classList.remove("soft-ping"), 3200);
+    playAlertChime();
+  }
+
   function toggleInsightModal(type, open) {
     const modal = type === "signal" ? els.signalModal : els.layerModal;
     modal.classList.toggle("open", open);
@@ -542,7 +614,15 @@
     try {
       const response = await fetch(`/api/intel-snapshot?scope=${encodeURIComponent(state.scope)}&ts=${Date.now()}`);
       if (!response.ok) throw new Error(`Snapshot failed with status ${response.status}`);
-      state.snapshot = await response.json();
+      const nextSnapshot = await response.json();
+      const previousAlertIds = state.seenAlertIds;
+      state.snapshot = nextSnapshot;
+      const currentAlertIds = new Set((state.snapshot.alerts || []).map((alert) => alert.id));
+      if (previousAlertIds) {
+        const newCount = [...currentAlertIds].filter((id) => !previousAlertIds.has(id)).length;
+        if (newCount) cueNewAlert(newCount);
+      }
+      state.seenAlertIds = currentAlertIds;
       updateTrackHistory(state.snapshot);
       updateSystemStatusAge({ force: true });
       renderAll();
@@ -619,7 +699,7 @@
     const values = [
       { label: "Public Signals", value: snapshot.metrics.eventsToday, delta: "+ live" },
       { label: "Active Alerts", value: snapshot.metrics.alerts, delta: `${snapshot.alerts.length} official` },
-      { label: "Fire Hotspots", value: snapshot.fires?.length || 0, delta: "NASA FIRMS" },
+      { label: "Fire Signals", value: snapshot.fires?.length || 0, delta: "FIRMS + EGP" },
       { label: "Camera Feeds", value: snapshot.metrics.cameraFeeds || snapshot.cameras.length, delta: `${livePlayers} playable video feeds` },
     ];
 
@@ -892,10 +972,12 @@
   function setEarthView(viewId) {
     if (!EARTH_VIEWS.some((view) => view.id === viewId)) return;
     state.earthView = viewId;
+    if (viewId === "topo" && state.globeRenderer !== "cesium") setGlobeRenderer("cesium");
     document.querySelectorAll("[data-earth-view]").forEach((button) => {
       button.classList.toggle("active", button.dataset.earthView === viewId);
     });
     applyEarthView();
+    updateCesiumBaseLayer();
   }
 
   function setGlobeRenderer(rendererId) {
@@ -1079,8 +1161,7 @@
       cesiumGlobe.selectionSource = new Cesium.CustomDataSource("oversee-selection");
       await viewer.dataSources.add(cesiumGlobe.selectionSource);
 
-      const imageryProvider = await makeCesiumImageryProvider();
-      if (imageryProvider) viewer.imageryLayers.addImageryProvider(imageryProvider);
+      await updateCesiumBaseLayer();
       updateCesiumWeatherLayer();
       updateCesiumFloodLayer();
 
@@ -1106,7 +1187,7 @@
 
   async function makeCesiumImageryProvider() {
     const Cesium = globalThis.Cesium;
-    const url = "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer";
+    const url = state.earthView === "topo" ? USGS_TOPO_ARCGIS_URL : WORLD_IMAGERY_ARCGIS_URL;
     try {
       if (Cesium.ArcGisMapServerImageryProvider?.fromUrl) {
         return await Cesium.ArcGisMapServerImageryProvider.fromUrl(url);
@@ -1115,6 +1196,19 @@
     } catch {
       return null;
     }
+  }
+
+  async function updateCesiumBaseLayer() {
+    const viewer = cesiumGlobe.viewer;
+    if (!viewer || !globalThis.Cesium) return;
+    const provider = await makeCesiumImageryProvider();
+    if (!provider) return;
+    if (cesiumGlobe.baseLayer) {
+      viewer.imageryLayers.remove(cesiumGlobe.baseLayer, false);
+      cesiumGlobe.baseLayer = null;
+    }
+    cesiumGlobe.baseLayer = viewer.imageryLayers.addImageryProvider(provider, 0);
+    cesiumGlobe.baseLayer.alpha = 1;
   }
 
   async function makeNoaaRadarProvider() {
@@ -1222,7 +1316,7 @@
     if (!globe.earth?.material || !globalThis.THREE) return;
     const material = globe.earth.material;
     const token = (globe.earthViewToken += 1);
-    if (state.earthView === "ops") {
+    if (state.earthView === "ops" || state.earthView === "topo") {
       material.map = globe.defaultEarthTexture;
       material.emissive.setHex(0x03111d);
       material.emissiveIntensity = 0.34;
@@ -1260,6 +1354,13 @@
     if (!globe.renderer) return;
     globe.animationId = requestAnimationFrame(animateGlobe);
     const t = performance.now() / 1000;
+    if (state.idleSpin) {
+      if (state.globeRenderer === "cesium" && cesiumGlobe.ready && cesiumGlobe.viewer) {
+        cesiumGlobe.viewer.camera.rotate(globalThis.Cesium.Cartesian3.UNIT_Z, -0.00018);
+      } else if (globe.worldGroup && !globe.dragging) {
+        globe.worldGroup.rotation.y += 0.0012;
+      }
+    }
     for (const sprite of globe.pickables) {
       const base = sprite.userData.baseScale || 0.055;
       const pulse = 1 + Math.sin(t * 2.2 + sprite.userData.phase) * 0.08;
@@ -1410,13 +1511,29 @@
       });
     }
     if (type === "flight") addCesiumTrackLine(cesiumGlobe.selectionSource, "flight", item, cesiumColor(COLORS.flights, 0.9), 3);
-    if (type === "alert") {
+    if (type === "quake" && item.shakeMap?.overlay && item.shakeMap?.bounds) {
+      const bounds = item.shakeMap.bounds;
+      if ([bounds.west, bounds.south, bounds.east, bounds.north].every((value) => Number.isFinite(Number(value)))) {
+        cesiumGlobe.selectionSource.entities.add({
+          rectangle: {
+            coordinates: Cesium.Rectangle.fromDegrees(bounds.west, bounds.south, bounds.east, bounds.north),
+            material: new Cesium.ImageMaterialProperty({
+              image: toProxyImageUrl(item.shakeMap.overlay),
+              transparent: true,
+              color: Cesium.Color.WHITE.withAlpha(0.58),
+            }),
+            height: 8000,
+          },
+        });
+      }
+    }
+    if (type === "alert" || ((type === "fire" || type === "quake") && Array.isArray(item.geometryRings) && item.geometryRings.length)) {
       const rings = Array.isArray(item.geometryRings) && item.geometryRings.length ? item.geometryRings : [makeGeoCircle(lat, lng, clamp(Number(item.radiusKm || 220), 80, 900))];
       for (const ring of rings) {
         cesiumGlobe.selectionSource.entities.add({
           polyline: {
             positions: cesiumPositions(ring, 6000),
-            width: 3,
+            width: type === "alert" ? 3 : 2.5,
             material: color.withAlpha(0.9),
             clampToGround: false,
           },
@@ -1519,7 +1636,7 @@
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
     const color = type === "alert" ? COLORS.alerts : colorForType(type);
-    if (type === "alert") {
+    if (type === "alert" || ((type === "fire" || type === "quake") && Array.isArray(item.geometryRings) && item.geometryRings.length)) {
       const rings = Array.isArray(item.geometryRings) ? item.geometryRings : [];
       if (rings.length) {
         for (const ring of rings) {
@@ -1535,7 +1652,7 @@
       const sprite = makeSprite(color, 0.16);
       sprite.position.copy(latLngToVector3(lat, lng, 2.2));
       globe.selectionGroup.add(sprite);
-      return;
+      if (type === "alert") return;
     }
 
     if (type === "flight" && Number.isFinite(Number(item.heading))) {
@@ -2094,6 +2211,18 @@
       </div>`;
       return;
     }
+    if (type === "quake" && item.shakeMap?.intensityMap) {
+      els.watchView.innerHTML = `<div class="asset-watch shakemap-watch" style="border-color:${color}">
+        <div>
+          <span class="media-badge live">USGS ShakeMap</span>
+          <h3>${escapeHtml(item.name || item.title || "Earthquake")}</h3>
+          <p>${escapeHtml(infoSummary(type, item))}</p>
+          <img src="${toProxyImageUrl(item.shakeMap.intensityMap)}" alt="USGS ShakeMap intensity map">
+        </div>
+        <button class="text-button" type="button" data-select-type="quake" data-select-id="${escapeHtml(item.id)}" data-focus="true">Center On Globe</button>
+      </div>`;
+      return;
+    }
     const trackPoints = getTrackPoints(type, item);
     const trackText = type === "flight"
       ? trackPoints.length > 1
@@ -2344,6 +2473,10 @@
       item.severity,
       item.location,
       item.objectType,
+      item.subtype,
+      item.gacc,
+      item.county,
+      item.state,
     ]
       .concat(Array.isArray(item.tags) ? item.tags : [])
       .filter(Boolean)
@@ -2539,12 +2672,24 @@
         ["Magnitude", item.magnitude ? item.magnitude.toFixed(1) : "unknown"],
         ["Depth", item.depthKm ? `${item.depthKm.toFixed(1)} km` : "unknown"],
         ["Place", item.location || "unknown"],
+        ["ShakeMap", item.shakeMap ? `MMI ${Number(item.shakeMap.maxMmi || 0).toFixed(1)}` : "not available"],
         ["Time", formatShortTime(item.time)],
         ["Severity", item.severity || "seismic"],
         ["Source", "USGS"],
       ];
     }
     if (type === "fire") {
+      if (item.subtype === "incident" || item.subtype === "perimeter") {
+        return [
+          ["Kind", item.subtype === "perimeter" ? "Current perimeter" : "Active incident"],
+          ["Acres", item.acres ? formatNumber(Math.round(item.acres)) : "unknown"],
+          ["Containment", item.containment != null ? `${item.containment}%` : "unknown"],
+          ["Area", [item.county, item.state].filter(Boolean).join(", ") || item.gacc || "unknown"],
+          ["Cause", item.cause || "unknown"],
+          ["Updated", formatShortTime(item.time)],
+          ["Source", item.source || "EGP WildFireSA"],
+        ];
+      }
       return [
         ["Confidence", item.confidence || "unknown"],
         ["FRP", item.frp ? `${Math.round(item.frp)} MW` : "unknown"],
@@ -2576,6 +2721,7 @@
     if (type === "satellite") return `${item.objectType || "Satellite"} | ${item.altitudeKm ? `${Math.round(item.altitudeKm)} km` : "orbit"} | CelesTrak`;
     if (type === "flight") return `${item.registration || item.country || "Unknown"} | ${item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "altitude unknown"} | ${item.source || "Aircraft feed"}`;
     if (type === "quake") return `M${item.magnitude?.toFixed?.(1) || "?"} | ${item.location || "USGS event"}`;
+    if (type === "fire" && (item.subtype === "incident" || item.subtype === "perimeter")) return `${item.subtype === "perimeter" ? "Perimeter" : "Incident"} | ${item.acres ? `${formatNumber(Math.round(item.acres))} acres` : item.gacc || "WildFireSA"} | ${item.source || "EGP"}`;
     if (type === "fire") return `${item.instrument || "VIIRS"} | FRP ${Math.round(item.frp || 0)} | ${item.confidence || "unknown"} confidence`;
     if (type === "alert") return `${item.event || "Alert"} | ${item.areaSummary || item.region || item.area || "NWS"}`;
     return item.source || "Public signal";
@@ -2584,7 +2730,9 @@
   function infoSummary(type, item) {
     if (type === "satellite") return "Approximate live position from current public element data.";
     if (type === "flight") return `Public aircraft state from ${item.source || "available public aircraft feed"}.`;
-    if (type === "quake") return "USGS seismic event from the all-day GeoJSON feed.";
+    if (type === "quake") return item.shakeMap ? `USGS seismic event with ShakeMap impact data. Max MMI ${Number(item.shakeMap.maxMmi || 0).toFixed(1)}.` : "USGS seismic event from the all-day GeoJSON feed.";
+    if (type === "fire" && item.subtype === "perimeter") return `Current interagency perimeter from WFIGS. ${item.acres ? `${formatNumber(Math.round(item.acres))} mapped acres.` : "Mapped perimeter available."}`;
+    if (type === "fire" && item.subtype === "incident") return `Active incident from EGP WildFireSA. ${item.acres ? `${formatNumber(Math.round(item.acres))} reported acres.` : "Incident details available."}`;
     if (type === "fire") return `NASA FIRMS ${item.instrument || "VIIRS"} hotspot. FRP ${Math.round(item.frp || 0)}, confidence ${item.confidence || "unknown"}.`;
     if (type === "alert") return "Official public weather alert from the National Weather Service.";
     return assetSubtitle(type, item);
