@@ -177,7 +177,6 @@ a {
 
 .topbar,
 .panel,
-.rail-section,
 .world-theater,
 .source-drawer {
   border: 1px solid var(--line);
@@ -320,9 +319,7 @@ a {
 }
 
 .ops-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 390px;
-  gap: 8px;
+  display: block;
 }
 
 .world-theater {
@@ -767,13 +764,6 @@ a {
   height: 14px;
 }
 
-.right-rail {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.rail-section,
 .panel {
   padding: 12px;
 }
@@ -970,7 +960,7 @@ a {
 
 .lower-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 0.55fr) minmax(360px, 1.25fr) minmax(320px, 0.9fr);
+  grid-template-columns: minmax(220px, 0.52fr) minmax(340px, 1.1fr) minmax(280px, 0.78fr) minmax(280px, 0.82fr);
   gap: 8px;
 }
 
@@ -1762,10 +1752,6 @@ a {
     min-height: 0;
   }
 
-  .right-rail {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
   .camera-watch-panel {
     position: sticky;
   }
@@ -1811,7 +1797,6 @@ a {
   }
 
   .metric-strip,
-  .right-rail,
   .source-grid,
   .watch-detail,
   .donut-wrap,

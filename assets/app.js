@@ -188,7 +188,6 @@
     sensorModeControls: document.getElementById("sensorModeControls"),
     layerControls: document.getElementById("layerControls"),
     metricStrip: document.getElementById("metricStrip"),
-    eventList: document.getElementById("eventList"),
     alertDrawer: document.getElementById("alertDrawer"),
     alertDrawerList: document.getElementById("alertDrawerList"),
     openAlertDrawer: document.getElementById("openAlertDrawer"),
@@ -625,11 +624,8 @@
       : `<div class="empty-state">No active alert signals in this scope.</div>`;
 
     if (!events.length) {
-      els.eventList.innerHTML = `<div class="empty-state">No matching live events.</div>`;
       return;
     }
-
-    els.eventList.innerHTML = events.map(renderEventCard).join("");
   }
 
   function renderEventCard(event) {
