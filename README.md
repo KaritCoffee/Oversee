@@ -40,6 +40,36 @@ Optional:
 - Set `OPENSKY_TOKEN` if you have an OpenSky bearer token.
 - Double-click [run-oversee.bat](./run-oversee.bat) to launch from Explorer.
 
+## Windows Desktop App
+
+The repo now includes a Tauri shell for a native Windows WebView app.
+
+Install JavaScript dependencies:
+
+```powershell
+npm install
+```
+
+Run the desktop app during development:
+
+```powershell
+npm run desktop:dev
+```
+
+Build a Windows installer:
+
+```powershell
+npm run desktop:build
+```
+
+Or use the helper script, which checks prerequisites first:
+
+```powershell
+.\scripts\build-windows.ps1
+```
+
+Desktop builds require Rust/Cargo and Microsoft C++ Build Tools. See [docs/tauri-windows.md](./docs/tauri-windows.md) for setup notes.
+
 ## Notes
 
 Satellite positions are generated from public CelesTrak element data with a lightweight browser-friendly approximation. They are good for visualization and situational context, not precision orbital analysis.

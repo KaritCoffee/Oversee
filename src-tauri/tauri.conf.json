@@ -1,0 +1,28 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Oversee",
+  "version": "0.1.0",
+  "identifier": "com.karitcoffee.oversee",
+  "build": {
+    "beforeDevCommand": "node server.js",
+    "devUrl": "http://127.0.0.1:4173",
+    "frontendDist": "placeholder-dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "resources": [
+      "../server.js",
+      "../index.html",
+      "../assets",
+      "../docs",
+      "../README.md"
+    ]
+  }
+}

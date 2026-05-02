@@ -476,6 +476,7 @@
     els.clockUtc.textContent = `${now.toISOString().slice(11, 16)} UTC`;
     els.clockLocal.textContent = now.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
     updateSystemStatusAge();
+    updateSnapshotAgeLabels();
   }
 
   function updateSystemStatusAge(options = {}) {
@@ -485,6 +486,11 @@
     const total = sources.length || responding;
     els.systemStatusLabel.textContent = total && responding < total ? "Partial Data" : "Data Online";
     els.systemStatusSub.textContent = `${responding}/${total || 0} sources | updated ${formatTimeAgo(state.snapshot.generatedAt)}`;
+  }
+
+  function updateSnapshotAgeLabels() {
+    if (!state.snapshot?.generatedAt) return;
+    els.theaterSubtitle.textContent = subtitleForScope();
   }
 
   async function refreshSnapshot(options = {}) {
