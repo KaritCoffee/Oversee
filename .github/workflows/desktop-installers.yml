@@ -30,7 +30,7 @@ jobs:
             paths: |
               src-tauri/target/release/bundle/dmg/*.dmg
           - platform: macos-intel
-            os: macos-13
+            os: macos-15-intel
             bundles: dmg
             artifact: macos-intel-installer
             paths: |
