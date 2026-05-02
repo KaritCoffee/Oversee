@@ -110,8 +110,23 @@
                 <div class="segmented-control compact" id="earthViewControls" aria-label="Earth imagery"></div>
                 <div class="segmented-control compact" id="sensorModeControls" aria-label="Sensor mode"></div>
               </div>
+              <button class="alert-drawer-toggle" type="button" id="openAlertDrawer" aria-expanded="false" aria-controls="alertDrawer">
+                <i data-lucide="bell-ring"></i>
+                <span>Alerts</span>
+                <strong id="alertDrawerCount">0</strong>
+              </button>
               <div class="layer-dock" id="layerControls" aria-label="Data layers"></div>
               <div class="selection-card" id="selectionCard"></div>
+              <aside class="alert-drawer" id="alertDrawer" aria-hidden="true">
+                <div class="drawer-head compact">
+                  <div>
+                    <h2>Globe Alerts</h2>
+                    <p>Click one to focus and highlight its affected area.</p>
+                  </div>
+                  <button class="text-button" type="button" id="closeAlertDrawer">Close</button>
+                </div>
+                <div class="event-list alert-drawer-list" id="alertDrawerList"></div>
+              </aside>
             </div>
           </section>
 

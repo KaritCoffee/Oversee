@@ -555,6 +555,105 @@ a {
   box-shadow: 0 0 14px currentColor;
 }
 
+.alert-drawer-toggle {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 8;
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 12px;
+  border-color: rgba(255, 78, 87, 0.42);
+  border-radius: 999px;
+  color: #ffe4e7;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: rgba(32, 7, 12, 0.78);
+  box-shadow: 0 0 22px rgba(255, 78, 87, 0.16);
+}
+
+.alert-drawer-toggle:hover,
+.alert-drawer-toggle[aria-expanded="true"] {
+  border-color: rgba(255, 78, 87, 0.78);
+  background: rgba(92, 18, 27, 0.86);
+  transform: translateY(-1px);
+}
+
+.alert-drawer-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.alert-drawer-toggle strong {
+  display: grid;
+  min-width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+  color: #05080c;
+  background: #ff4e57;
+}
+
+.alert-drawer {
+  position: absolute;
+  top: 66px;
+  right: 18px;
+  bottom: 78px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  width: min(390px, calc(100% - 36px));
+  padding: 12px;
+  border: 1px solid rgba(255, 78, 87, 0.28);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(16, 31, 45, 0.95), rgba(4, 10, 16, 0.95)),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 4px);
+  box-shadow: -20px 0 48px rgba(0, 0, 0, 0.34), 0 0 28px rgba(255, 78, 87, 0.12);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(28px);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.alert-drawer.open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+}
+
+.drawer-head.compact {
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.drawer-head.compact p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.alert-drawer-list {
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.alert-drawer-list .event-card {
+  grid-template-columns: 30px 1fr;
+}
+
+.alert-drawer-list .event-chip {
+  grid-column: 2;
+  justify-self: start;
+}
+
 .selection-card {
   position: absolute;
   left: 18px;
@@ -1693,6 +1792,18 @@ a {
   .layer-dock {
     left: 12px;
     right: 12px;
+  }
+
+  .alert-drawer-toggle {
+    top: 12px;
+    right: 12px;
+  }
+
+  .alert-drawer {
+    top: 58px;
+    right: 12px;
+    bottom: 132px;
+    width: calc(100% - 24px);
   }
 
   .layer-dock {

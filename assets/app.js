@@ -184,6 +184,11 @@
     layerControls: document.getElementById("layerControls"),
     metricStrip: document.getElementById("metricStrip"),
     eventList: document.getElementById("eventList"),
+    alertDrawer: document.getElementById("alertDrawer"),
+    alertDrawerList: document.getElementById("alertDrawerList"),
+    openAlertDrawer: document.getElementById("openAlertDrawer"),
+    closeAlertDrawer: document.getElementById("closeAlertDrawer"),
+    alertDrawerCount: document.getElementById("alertDrawerCount"),
     regionList: document.getElementById("regionList"),
     sortRegions: document.getElementById("sortRegions"),
     cameraFilterControls: document.getElementById("cameraFilterControls"),
@@ -262,6 +267,8 @@
     els.cycleSensorMode.addEventListener("click", cycleSensorMode);
     els.openSourcePanel.addEventListener("click", () => toggleSourceDrawer(true));
     els.closeSourcePanel.addEventListener("click", () => toggleSourceDrawer(false));
+    els.openAlertDrawer.addEventListener("click", () => toggleAlertDrawer());
+    els.closeAlertDrawer.addEventListener("click", () => toggleAlertDrawer(false));
     els.openSignalModal.addEventListener("click", () => toggleInsightModal("signal", true));
     els.openLayerModal.addEventListener("click", () => toggleInsightModal("layer", true));
     els.sortRegions.addEventListener("click", () => {
@@ -318,6 +325,7 @@
       if (action) {
         const item = findItem(action.dataset.selectType, action.dataset.selectId);
         if (item) selectObject(action.dataset.selectType, item, { focus: action.dataset.focus === "true" });
+        if (action.closest("#alertDrawer")) toggleAlertDrawer(false);
       }
 
       const pinAction = event.target.closest("[data-pin-asset]");
@@ -461,6 +469,13 @@
     els.sourceDrawer.setAttribute("aria-hidden", open ? "false" : "true");
   }
 
+  function toggleAlertDrawer(open) {
+    const shouldOpen = typeof open === "boolean" ? open : !els.alertDrawer.classList.contains("open");
+    els.alertDrawer.classList.toggle("open", shouldOpen);
+    els.alertDrawer.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
+    els.openAlertDrawer.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+  }
+
   function toggleInsightModal(type, open) {
     const modal = type === "signal" ? els.signalModal : els.layerModal;
     modal.classList.toggle("open", open);
@@ -589,26 +604,33 @@
   }
 
   function renderEvents() {
-    const events = getFilteredEvents().slice(0, 5);
+    const allEvents = getFilteredEvents();
+    const events = allEvents.slice(0, 5);
+    const alertEvents = allEvents.filter((event) => event.type === "alert").slice(0, 10);
+    els.alertDrawerCount.textContent = String(alertEvents.length || state.snapshot?.alerts?.length || 0);
+    els.alertDrawerList.innerHTML = alertEvents.length
+      ? alertEvents.map(renderEventCard).join("")
+      : `<div class="empty-state">No active alert signals in this scope.</div>`;
+
     if (!events.length) {
       els.eventList.innerHTML = `<div class="empty-state">No matching live events.</div>`;
       return;
     }
 
-    els.eventList.innerHTML = events
-      .map((event) => {
-        const icon = iconForType(event.type);
-        const color = colorForType(event.type);
-        const subtitle = event.type === "alert"
-          ? `${event.event || "Weather alert"} | ${event.areaSummary || event.region || "NWS"}`
-          : event.region || event.location || event.source || "Public signal";
-        return `<button class="event-card" type="button" data-select-type="${event.type}" data-select-id="${event.id}">
-          <span class="event-icon" style="color:${color}"><i data-lucide="${icon}"></i></span>
-          <span><h3>${escapeHtml(event.title)}</h3><p>${escapeHtml(subtitle)}</p></span>
-          <span class="event-chip" style="color:${color}">${escapeHtml(event.severity || event.type)}</span>
-        </button>`;
-      })
-      .join("");
+    els.eventList.innerHTML = events.map(renderEventCard).join("");
+  }
+
+  function renderEventCard(event) {
+    const icon = iconForType(event.type);
+    const color = colorForType(event.type);
+    const subtitle = event.type === "alert"
+      ? `${event.event || "Weather alert"} | ${event.areaSummary || event.region || "NWS"}`
+      : event.region || event.location || event.source || "Public signal";
+    return `<button class="event-card" type="button" data-select-type="${event.type}" data-select-id="${event.id}">
+      <span class="event-icon" style="color:${color}"><i data-lucide="${icon}"></i></span>
+      <span><h3>${escapeHtml(event.title)}</h3><p>${escapeHtml(subtitle)}</p></span>
+      <span class="event-chip" style="color:${color}">${escapeHtml(event.severity || event.type)}</span>
+    </button>`;
   }
 
   function renderRegions() {
