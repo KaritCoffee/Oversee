@@ -1173,8 +1173,9 @@
           color,
           outlineColor: Cesium.Color.WHITE.withAlpha(0.78),
           outlineWidth: type === "alert" ? 2 : 1,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
           heightReference: Cesium.HeightReference.NONE,
+          scaleByDistance: new Cesium.NearFarScalar(900000, 1.08, 18000000, 0.54),
+          translucencyByDistance: new Cesium.NearFarScalar(900000, 0.96, 21000000, 0.42),
         },
       });
       entity.oversee = { type, item };
@@ -1231,7 +1232,8 @@
         color,
         outlineColor: Cesium.Color.WHITE.withAlpha(0.95),
         outlineWidth: 3,
-        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        heightReference: Cesium.HeightReference.NONE,
+        scaleByDistance: new Cesium.NearFarScalar(900000, 1.15, 18000000, 0.68),
       },
     });
     cesiumGlobe.selectionSource.entities.add({
