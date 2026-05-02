@@ -36,8 +36,11 @@ const SOURCE_URLS = {
   coloradoCotripCameras: "https://cotg.carsprogram.org/cameras_v1/api/cameras",
   nebraska511Cameras: "https://netg.carsprogram.org/cameras_v1/api/cameras",
   kansas511Cameras: "https://kstg.carsprogram.org/cameras_v1/api/cameras",
-  southDakota511Cameras: "https://sdtg.carsprogram.org/cameras_v1/api/cameras",
   northDakotaCameras: "https://travelfiles.dot.nd.gov/geojson_nc/cameras.json",
+  ontario511Cameras: "https://511on.ca/api/v2/get/cameras?format=json",
+  alberta511Cameras: "https://511.alberta.ca/api/v2/get/cameras?format=json",
+  fintrafficWeathercams: "https://tie.digitraffic.fi/api/weathercam/v1/stations",
+  fintrafficWeathercamData: "https://tie.digitraffic.fi/api/weathercam/v1/stations/data",
   missouriSnapshots: "https://traveler.modot.org/map/js/snapshot.json",
   arizonaListCameras: "https://az511.com/List/GetData/Cameras",
 };
@@ -63,6 +66,22 @@ const DYNAMIC_CAMERAS_BY_ID = new Map();
 const CELESTRAK_FALLBACK_GROUPS = ["visual", "stations", "starlink", "gps-ops", "gnss", "geo", "weather", "resource"];
 
 const ARCGIS_CAMERA_SOURCES = [
+  {
+    id: "drivebc",
+    name: "DriveBC Highway Cameras",
+    url: "https://services.arcgis.com/zmLUiqh7X11gGV2d/ArcGIS/rest/services/Drive_BC_Web_Cameras/FeatureServer/0/query",
+    country: "Canada",
+    region: "British Columbia",
+    category: "traffic",
+    nameFields: ["camName", "orientation"],
+    areaFields: ["highway_locationDescription", "highway_number"],
+    imageFields: ["links_imageDisplay"],
+    sourcePageFields: ["links_bchighwaycam"],
+    useGeometryCoordinates: true,
+    refreshSeconds: 900,
+    officialUrl: "https://drivebc.ca/",
+    tags: ["british-columbia", "drivebc", "canada", "traffic"],
+  },
   {
     id: "txdot-windy",
     name: "Texas TxDOT / Windy Cameras",
@@ -534,20 +553,6 @@ function cameraAdapterSpecs(scope) {
       }),
     });
     adapters.push({
-      key: "cameras:south-dakota-511",
-      name: "South Dakota 511 Cameras",
-      ttlMs: 2 * 60 * 1000,
-      fetcher: () => fetchCarsProgramCameras({
-        idPrefix: "sd511",
-        sourceName: "South Dakota 511 Cameras",
-        url: SOURCE_URLS.southDakota511Cameras,
-        origin: "https://sd511.org",
-        officialUrl: "https://sd511.org/",
-        region: "South Dakota",
-        tags: ["south-dakota", "sd511", "sddot", "traffic"],
-      }),
-    });
-    adapters.push({
       key: "cameras:north-dakota-dot",
       name: "North Dakota DOT Cameras",
       ttlMs: 5 * 60 * 1000,
@@ -572,6 +577,40 @@ function cameraAdapterSpecs(scope) {
       name: "Transport for London JamCams",
       ttlMs: 2 * 60 * 1000,
       fetcher: fetchTflJamCams,
+    });
+    adapters.push({
+      key: "cameras:ontario-511",
+      name: "Ontario 511 Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: () => fetchV2RoadCameras({
+        idPrefix: "on511",
+        sourceName: "Ontario 511 Cameras",
+        url: SOURCE_URLS.ontario511Cameras,
+        officialUrl: "https://511on.ca/",
+        region: "Ontario",
+        country: "Canada",
+        tags: ["ontario", "511", "mto", "canada", "traffic"],
+      }),
+    });
+    adapters.push({
+      key: "cameras:alberta-511",
+      name: "Alberta 511 Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: () => fetchV2RoadCameras({
+        idPrefix: "ab511",
+        sourceName: "Alberta 511 Cameras",
+        url: SOURCE_URLS.alberta511Cameras,
+        officialUrl: "https://511.alberta.ca/",
+        region: "Alberta",
+        country: "Canada",
+        tags: ["alberta", "511", "canada", "traffic"],
+      }),
+    });
+    adapters.push({
+      key: "cameras:fintraffic-weathercams",
+      name: "Fintraffic Weather Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: fetchFintrafficWeathercams,
     });
   }
   if (scope === "world" || scope === "us" || scope === "west") {
@@ -849,6 +888,118 @@ async function fetchNorthDakotaCameras() {
         };
       })
       .filter(Boolean);
+  });
+}
+
+async function fetchV2RoadCameras(source) {
+  const records = await fetchJson(source.url, { timeoutMs: 15000 });
+  return (Array.isArray(records) ? records : []).flatMap((record) => {
+    const lat = Number(record.Latitude);
+    const lng = Number(record.Longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+    const location = cleanCameraText(record.Location || `${source.region} traffic camera`);
+    const roadway = cleanCameraText(record.Roadway || "");
+    const rawDirection = cleanCameraText(record.Direction || "");
+    const direction = /^unknown$/i.test(rawDirection) ? "" : rawDirection;
+    const views = Array.isArray(record.Views) && record.Views.length ? record.Views : [];
+    return views
+      .filter((view) => String(view.Status || "Enabled").toLowerCase() === "enabled")
+      .map((view, index) => {
+        const imageUrl = normalizeUrl(view.Url);
+        if (!imageUrl) return null;
+        const rawViewLabel = cleanCameraText(view.Description || direction || "");
+        const viewLabel = /^unknown$/i.test(rawViewLabel) || /^-?\d+(?:\.\d+)?$/.test(rawViewLabel) ? "" : rawViewLabel;
+        const name = viewLabel ? `${location} - ${viewLabel}` : location;
+        return {
+          id: `${source.idPrefix}-${record.Id}-${view.Id || index}`,
+          dynamic: true,
+          type: "camera",
+          name,
+          shortName: shortCameraName(name),
+          area: location,
+          region: source.region,
+          county: location,
+          country: source.country,
+          category: "traffic",
+          media: "still",
+          status: "Online",
+          freshness: 2,
+          tags: [...source.tags, roadway, direction, viewLabel].filter(Boolean),
+          sourceId: source.idPrefix,
+          sourceName: source.sourceName,
+          sourceUrl: source.url,
+          officialUrl: source.officialUrl,
+          sourcePageUrl: source.officialUrl,
+          lat,
+          lng,
+          viewerType: "image",
+          capability: "snapshot",
+          capabilityLabel: "Current Still",
+          previewUrl: imageUrl,
+          imageUrl,
+          refreshSeconds: 120,
+        };
+      })
+      .filter(Boolean);
+  });
+}
+
+async function fetchFintrafficWeathercams() {
+  const [stationMetadata, stationData] = await Promise.all([
+    fetchJson(SOURCE_URLS.fintrafficWeathercams, {
+      timeoutMs: 15000,
+      headers: { "Digitraffic-User": "Oversee local public camera dashboard" },
+    }),
+    fetchJson(SOURCE_URLS.fintrafficWeathercamData, {
+      timeoutMs: 15000,
+      headers: { "Digitraffic-User": "Oversee local public camera dashboard" },
+    }),
+  ]);
+  const livePresetIds = new Set(
+    (stationData.stations || []).flatMap((station) =>
+      (station.presets || []).filter((preset) => preset.measuredTime).map((preset) => preset.id)
+    )
+  );
+  return (stationMetadata.features || []).flatMap((feature) => {
+    const [lng, lat] = feature?.geometry?.coordinates || [];
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return [];
+    const stationName = cleanCameraText(feature?.properties?.name || feature?.properties?.id || "Fintraffic weathercam");
+    const stationId = cleanCameraText(feature?.properties?.id || stationName);
+    return (feature?.properties?.presets || [])
+      .filter((preset) => preset.inCollection && livePresetIds.has(preset.id))
+      .map((preset) => {
+        const imageUrl = `https://weathercam.digitraffic.fi/${preset.id}.jpg`;
+        const name = `${stationName} ${preset.id.slice(-2)}`;
+        return {
+          id: `fintraffic-${preset.id}`,
+          dynamic: true,
+          type: "camera",
+          name,
+          shortName: shortCameraName(name),
+          area: stationName,
+          region: "Finland",
+          county: stationName,
+          country: "Finland",
+          category: "traffic",
+          media: "still",
+          status: "Online",
+          freshness: 1,
+          tags: ["finland", "fintraffic", "digitraffic", "weathercam", "traffic", stationId],
+          sourceId: "fintraffic-weathercams",
+          sourceName: "Fintraffic Weather Cameras",
+          sourceUrl: SOURCE_URLS.fintrafficWeathercams,
+          officialUrl: "https://www.digitraffic.fi/en/road-traffic/",
+          sourcePageUrl: "https://www.digitraffic.fi/en/road-traffic/",
+          lat: Number(lat),
+          lng: Number(lng),
+          viewerType: "image",
+          capability: "snapshot",
+          capabilityLabel: "Current Still",
+          previewUrl: imageUrl,
+          imageUrl,
+          refreshSeconds: 60,
+        };
+      });
   });
 }
 
