@@ -1,0 +1,2235 @@
+Ex-Google Maps PM Vibe Coded Palantir In a Weekend (Palantir Noticed)
+ Video transcript 
+0:00
+[music]
+0:03
+So, I posted my latest coding project
+0:05
+last night and woke up to it trending on
+0:07
+X.
+0:07
+It's like being shared by all these
+0:09
+people. Oh yeah, I vibe coded Palanteer.
+0:10
+Like, we're replacing everything.
+0:12
+Palunteer is going down. I'm like,
+0:13
+this is world view and it's what happens
+0:15
+when you take real-time satellite
+0:16
+tracking, live CCTV cameras, military
+0:19
+and commercial flight data, and fuse it
+0:22
+all together against a 3D model of the
+0:24
+world skinned to look like a classified
+0:26
+intelligence system. Groc summarized it
+0:28
+as ex Google PM builds spy thriller
+0:31
+geospatial dashboard. And yeah, I built
+0:33
+this in [music] three days with an army
+0:35
+of AI agents. And the Palunteer
+0:37
+co-founder says, I'm missing real
+0:39
+proprietary data fusion. But let me show
+0:41
+you what's possible right now and
+0:43
+encourage you to do the freaking same
+0:45
+because if you got domain expertise,
+0:47
+this is the time to [music] put it to
+Google Earth meets Palantir
+0:49
+work. Let's get into it. All right, so
+0:50
+my goal was basically to imagine what it
+0:53
+would look like if Google Earth and
+0:54
+Palunteer have a baby. So to start
+0:57
+things out, you've got the full globe in
+0:58
+here. 3D tiles, which by the way, I had
+1:00
+a chance to work on and launch at
+CRT, Night Vision & FLIR modes
+1:02
+Google. Google's 3D tiles up in this
+1:04
+joint. And the first thing you can do is
+1:06
+switch between a bunch of different
+1:07
+modes. Essentially, if you click through
+1:08
+these numbers, I can switch between CRT,
+1:10
+night vision, and fleer. And I've got
+1:12
+full control over here. I can change
+1:14
+like the sensitivity. I can talk about
+1:16
+how much pixelation there is. And by the
+1:18
+way, it's so cool that you can do all
+1:20
+these effects in your browser. We've got
+1:22
+gazillion data layers that we've hooked
+1:23
+up to. the ability to actually like plan
+Camera presets & landmarks
+1:25
+out your shots so that if you're doing
+1:26
+this for content creation, you can jump
+1:28
+between them very easily. All this stuff
+1:30
+that I built custom to my needs just by
+1:33
+talking to AI systems and screenshotting
+1:36
+things a little bit. So, first things
+1:37
+first, I can jump between all these
+1:39
+different cities. And I had to basically
+1:41
+figure out what all the various
+1:43
+landmarks are. So, I can jump between
+1:45
+all the different landmarks. And what's
+1:46
+actually cool is that when you jump to
+1:48
+these different points of interest, I'm
+1:50
+actually looking at open street maps at
+1:52
+the 3D volume of each of these points of
+1:54
+interest. So they are perfectly
+1:57
+centered. If you just try to do this
+1:58
+naively with latitude and longitude,
+2:01
+your camera may end up somewhere over
+2:02
+here and not where you want it to be. So
+2:04
+this way I can position the camera
+2:06
+perfectly on what it is that I want
+2:09
+centered in the field of view. And
+2:11
+what's cool is I've got this for a bunch
+2:12
+of different landmarks across the world
+2:14
+and I just talk to it. And so I can
+2:15
+basically go to any city and like
+2:17
+basically jump between Q, W, E, R, T and
+2:21
+like it'll take me to all these points
+2:22
+of interest. All right, let me zoom out
+Live satellite tracking (every satellite in orbit)
+2:24
+to show you the entirety of the Earth to
+2:25
+showcase all the live data layers that
+2:27
+have been connected into this to give us
+2:29
+a realtime operational picture of what's
+2:31
+going on. So this is all the satellites
+2:33
+that are in orbit right freaking now.
+2:35
+This is real time, ladies and gentlemen.
+2:37
+And then I've got a detection mode over
+2:38
+here where I can do either a sparse set
+2:40
+or a full set of detections. This is all
+2:43
+the satellites with down to their IDs
+2:46
+and I can look at all of them. And the
+2:48
+cool part is if I click on any one of
+2:50
+these satellites, I can suddenly track
+2:52
+them in orbit. So this is NORAD 11574
+2:58
+and we're tracking this puppy right now.
+2:59
+Here's another NORAD one. And you can
+3:01
+see the orbit and once I click on a
+3:02
+satellite, you can see the orbit around
+3:04
+the planet that it's in. Is it
+3:06
+geostationary, geocynchronous, etc. And
+3:09
+of course, you can jump between all of
+3:10
+the other satellites out there. So
+Real-time flight data (6,700+ planes)
+3:12
+that's in space. Once we start zooming
+3:14
+into the planet, we can also use Open
+3:15
+Sky to load in live flight data. So give
+3:18
+this a second to pop in. We've got 6.7K
+3:22
+flights that have been loaded in. I'm
+3:23
+going to turn off the tracking just to
+3:24
+show you this is like actual live data
+3:27
+right now. It's freaking crazy. We got
+3:29
+all the planes on the planet tracked in
+3:32
+real time against a 3D globe. So, if I
+3:35
+turn on detection mode over here, what's
+3:37
+cool about this is I can also go into
+3:39
+any of these planes and track their
+3:42
+location in real time. Check out how
+3:44
+cool this looks.
+3:46
+This looks like a freaking spy movie
+3:48
+right now. And so, like look, you can
+3:50
+make these as like real things to
+3:51
+monitor the situation. Obviously,
+3:53
+there's a lot going on in the world all
+3:54
+over the place. But if you want to also
+3:57
+you can use this to make some very, very
+3:59
+cool visualizations. I mean, just look
+4:01
+at this, ladies and gentlemen. Like why
+4:02
+would I go try and build this in After
+4:04
+Effects when I could do this in real
+4:06
+time in my browser and get all the bells
+4:08
+and whistles you want? Again, like if
+4:09
+you want to throw some bloom on top,
+4:11
+hey, you can throw some bloom there,
+4:12
+too. You want to sharpen the image. You
+4:14
+can create all the filters that you
+4:15
+want. Like the way you basically create
+4:17
+LUTs for your video editing tools and
+4:20
+add a bunch of post-processing effects,
+4:22
+you can do that all inside your browser.
+4:24
+Just tell the agent to code it for you.
+Military flight tracking via ADS-B
+4:26
+Now, this is really cool. But can you
+4:28
+also look at military flights? So
+4:30
+there's this website called ADSB that
+4:33
+essentially uses a bunch of crowdsourced
+4:35
+data to track all the military planes
+4:37
+that are on the planet right now. So all
+4:39
+the orange stuff that you see right now
+4:41
+are military planes that typically are
+4:43
+not tracked on these plane tracking
+4:45
+websites. But thanks to the wonderful
+4:47
+world of open source intelligence, you
+4:49
+can see what's going on on the other
+4:52
+side of the freaking world. Monitoring
+4:54
+the situation just got a whole lot
+4:56
+easier, ladies and gentlemen. Now, one
+4:58
+of the most beautiful things that you
+4:59
+can do with geospatial data is filter
+5:01
+stuff, right? So, I can isolate
+5:02
+basically all the military planes in
+5:03
+this case. I think it's absolutely
+5:05
+insane that I can go over the Pentagon,
+5:06
+zoom out and see which military flights
+5:08
+are happening nearby and jump into any
+5:10
+one of them and in real time see what
+5:12
+satellites are flying above you is kind
+5:15
+of crazy. Then you throw in the military
+5:17
+planes. Then you throw in all the
+5:19
+regular planes and oh my god, you have
+5:20
+built yourself a personal panopticon all
+5:23
+using open source data feeds. So that's
+5:25
+all real-time data. I want to get back
+Street traffic simulation
+5:27
+to more real-time data in a second, but
+5:29
+just to make the media point for you
+5:30
+all, you can also essentially get street
+5:33
+traffic up and running. So, I've got in
+5:35
+this case essentially using all the open
+5:37
+street map road network data, I can
+5:39
+query it and essentially spawn a
+5:41
+particle system that emulates city
+5:43
+traffic. Now, suddenly I've got tracked
+5:46
+points across the whole freaking London
+5:48
+Bridge in the city of London, baby. I
+5:50
+actually like doing just sparse labels
+5:52
+because that way I can show you the
+5:54
+whole freaking city. And especially when
+5:55
+I go into things like NVG, night vision
+5:58
+mode, and thermal mode, these things
+5:59
+look spectacular. So, let me ask
+6:01
+you this. Like, you could totally try
+6:03
+and make something like this in VO, but
+6:05
+why not just code it up and screen
+6:06
+record it? You get way more control this
+6:08
+way. What's really cool about this is
+6:10
+even places where Google doesn't have 3D
+6:12
+data. So, for example, Dubai doesn't
+6:14
+like, you know, US companies going and
+6:16
+3D scanning their stuff, this approach
+6:18
+will still work. So, that's the Burj
+6:19
+Khalifa. Like this is an oblique imagery
+6:21
+shot, right? So this is all off of
+6:22
+satellite imagery that's looking off
+6:24
+nater. That's why you got these this
+6:26
+perspective view. And if I turn on
+6:28
+street traffic over here, what you'll
+6:30
+notice is the road network's still going
+6:31
+to look beautiful. Let me jump back down
+6:33
+to ground level for a second and show
+6:35
+you real time CCTV. Essentially, what
+Real-time CCTV camera feeds
+6:37
+I've got going on is basically this
+6:39
+whole panel that I created that will let
+6:41
+me turn on CCTV cameras and pull from
+6:44
+the live CCTV cams that we have in
+6:49
+Austin, Texas. Now, the cool thing about
+6:51
+this is like this is all openly
+6:53
+available. You can see this right now.
+6:56
+Somebody whipping by. You've got like
+6:57
+some sort of first responder going
+6:58
+through. And this data updates at one
+7:01
+frame per minute. So, it's not real
+7:03
+time, but it's a real data of what's
+7:06
+actually going on in the city. And so,
+7:08
+when I pick one of these cameras, I can
+7:10
+jump to it immediately and actually see
+7:12
+it projected onto the 3D geometry. So,
+7:16
+as you can see, that's the same
+7:17
+crosswalk over here, and we've got, as
+7:19
+you saw, like the vehicles just updated.
+7:21
+So, this is insane, right? Like, I can
+7:23
+jump between realtime traffic feeds.
+7:26
+Honestly, this feels like this shouldn't
+7:28
+be legal, but it is. I'm working on an
+7:31
+even more sophisticated calibration
+7:33
+system where I can drop a couple points
+7:35
+and connect this that's going to make
+7:37
+this near perfect and figure out all the
+7:39
+shader stuff that I need so that it
+7:41
+looks very very realistic projected on.
+7:43
+So that's crazy y'all like realtime
+7:45
+camera feeds of my city. I mean this
+7:47
+stuff is just available. This is like
+7:48
+the type of stuff that I would have
+7:50
+spent hours in After Effects doing
+7:52
+fakery or like going into Google Earth
+7:54
+Studio exporting a video out popping it
+7:56
+in over here and trying to do different
+7:58
+cool things with it. like now you can
+7:59
+just do this. Like it's kind of insane.
+8:01
+I've also got tags of every single
+Earthquake & seismic data
+8:03
+earthquake, like basically seismic
+8:05
+activity that's happening across the
+8:06
+globe. So you can start layering this
+8:08
+thing up, right? Like you take this, you
+8:10
+throw the satellites on there, you throw
+8:11
+in some of the military flights, and
+8:13
+like suddenly you've got a pretty
+8:15
+freaking comprehensive picture of what's
+8:17
+going on. And I mean there's so many
+8:19
+other data streams that are on my road
+8:20
+map to add in here. This is just what I
+8:22
+could put together in the last couple
+The AI coding tools I used
+8:25
+days. Now, if you're wondering which
+8:27
+coding tool to use to make this stuff
+8:29
+happen, all of them work. I use Gemini
+8:31
+3.1 and Claude 4.6 and even codeex 5.2.
+8:35
+Actually, we're on codeex 5.3 now. The
+8:37
+whole point being like these numbers
+8:39
+going to keep changing. What you want to
+8:40
+do is actually get into the CLI tools.
+8:43
+I'm going straight into terminal and
+Running agents in parallel
+8:45
+telling the AI what I want. Often times,
+8:47
+I actually have OpenClaw running three
+8:49
+or four of these terminals at once. And
+8:51
+this way I can actually work on two
+8:53
+projects at once and I'm controlling
+8:54
+like four, six, eight different agents
+8:56
+to get these tasks done. So for example,
+8:58
+I had one agent building out all the
+9:00
+shaders on top. Right? The way this
+9:01
+works is like you have some of the
+9:03
+agents doing your style presets. Maybe
+9:04
+you have another agent that's going and
+9:06
+doing all the data integration to build
+9:08
+your particle system for street traffic
+9:10
+or military and flight data. And so
+9:12
+look, I think sky is the limit, right?
+9:13
+Like doing something like this in
+9:15
+Blender would have been order magnitude
+9:16
+harder. Doing it directly in code in my
+9:18
+browser. It's insane what you can do.
+9:20
+So, look, the crazy part about all of
+9:21
+this is like I worked on Google Maps,
+9:24
+right? I worked on this 3D tile data set
+9:25
+that's out in the world. And the biggest
+9:27
+thing we'd run into is like developers
+9:28
+would have such a steep learning curve
+9:31
+to make all of this stuff operate. Now,
+9:33
+you can do it, too. And I mean, the AI
+9:35
+isn't going to do it all for you. Like,
+9:36
+one of the issues I ran into when I was
+9:37
+doing this panoptic view is like it
+9:39
+would just spawn too many particles and
+9:40
+just like immediately crash the browser.
+9:42
+And so, basically, I told it, hey, do
+9:43
+like sequential loading. Why don't you
+9:45
+load in all the main roads first and
+9:47
+then get all the arterial roads? So
+9:49
+essentially, you're doing creative
+9:50
+problem solving as you're talking to the
+9:52
+system is go play with any of these
+9:53
+coding editors. So I would implore you
+Now is the time to build stuff yourself
+9:54
+if you haven't seen my videos in the
+9:56
+past on like vibe coding for creatives,
+9:58
+check that video out over here so you
+10:00
+get a feel for what it actually looks
+10:02
+like to build these things out. And if
+10:03
+you want to see more videos like this
+10:05
+where we basically explore all the cool
+10:06
+things that you can vibe code both for
+10:08
+creation and spatial understanding of
+10:10
+the world, let me know in the comments
+10:11
+below. Anyway, Bolavo signing off and
+10:13
+I'll see y'all in the next one. Cheers.
+
+
+Ex-Google Maps PM Vibe Coded Palantir In a Weekend (Palantir Noticed) transcript
+0:00
+[music]
+0:03
+So, I posted my latest coding project
+0:05
+last night and woke up to it trending on
+0:07
+X.
+0:07
+It's like being shared by all these
+0:09
+people. Oh yeah, I vibe coded Palanteer.
+0:10
+Like, we're replacing everything.
+0:12
+Palunteer is going down. I'm like,
+0:13
+this is world view and it's what happens
+0:15
+when you take real-time satellite
+0:16
+tracking, live CCTV cameras, military
+0:19
+and commercial flight data, and fuse it
+0:22
+all together against a 3D model of the
+0:24
+world skinned to look like a classified
+0:26
+intelligence system. Groc summarized it
+0:28
+as ex Google PM builds spy thriller
+0:31
+geospatial dashboard. And yeah, I built
+0:33
+this in [music] three days with an army
+0:35
+of AI agents. And the Palunteer
+0:37
+co-founder says, I'm missing real
+0:39
+proprietary data fusion. But let me show
+0:41
+you what's possible right now and
+0:43
+encourage you to do the freaking same
+0:45
+because if you got domain expertise,
+0:47
+this is the time to [music] put it to
+Google Earth meets Palantir
+0:49
+work. Let's get into it. All right, so
+0:50
+my goal was basically to imagine what it
+0:53
+would look like if Google Earth and
+0:54
+Palunteer have a baby. So to start
+0:57
+things out, you've got the full globe in
+0:58
+here. 3D tiles, which by the way, I had
+1:00
+a chance to work on and launch at
+CRT, Night Vision & FLIR modes
+1:02
+Google. Google's 3D tiles up in this
+1:04
+joint. And the first thing you can do is
+1:06
+switch between a bunch of different
+1:07
+modes. Essentially, if you click through
+1:08
+these numbers, I can switch between CRT,
+1:10
+night vision, and fleer. And I've got
+1:12
+full control over here. I can change
+1:14
+like the sensitivity. I can talk about
+1:16
+how much pixelation there is. And by the
+1:18
+way, it's so cool that you can do all
+1:20
+these effects in your browser. We've got
+1:22
+gazillion data layers that we've hooked
+1:23
+up to. the ability to actually like plan
+Camera presets & landmarks
+1:25
+out your shots so that if you're doing
+1:26
+this for content creation, you can jump
+1:28
+between them very easily. All this stuff
+1:30
+that I built custom to my needs just by
+1:33
+talking to AI systems and screenshotting
+1:36
+things a little bit. So, first things
+1:37
+first, I can jump between all these
+1:39
+different cities. And I had to basically
+1:41
+figure out what all the various
+1:43
+landmarks are. So, I can jump between
+1:45
+all the different landmarks. And what's
+1:46
+actually cool is that when you jump to
+1:48
+these different points of interest, I'm
+1:50
+actually looking at open street maps at
+1:52
+the 3D volume of each of these points of
+1:54
+interest. So they are perfectly
+1:57
+centered. If you just try to do this
+1:58
+naively with latitude and longitude,
+2:01
+your camera may end up somewhere over
+2:02
+here and not where you want it to be. So
+2:04
+this way I can position the camera
+2:06
+perfectly on what it is that I want
+2:09
+centered in the field of view. And
+2:11
+what's cool is I've got this for a bunch
+2:12
+of different landmarks across the world
+2:14
+and I just talk to it. And so I can
+2:15
+basically go to any city and like
+2:17
+basically jump between Q, W, E, R, T and
+2:21
+like it'll take me to all these points
+2:22
+of interest. All right, let me zoom out
+Live satellite tracking (every satellite in orbit)
+2:24
+to show you the entirety of the Earth to
+2:25
+showcase all the live data layers that
+2:27
+have been connected into this to give us
+2:29
+a realtime operational picture of what's
+2:31
+going on. So this is all the satellites
+2:33
+that are in orbit right freaking now.
+2:35
+This is real time, ladies and gentlemen.
+2:37
+And then I've got a detection mode over
+2:38
+here where I can do either a sparse set
+2:40
+or a full set of detections. This is all
+2:43
+the satellites with down to their IDs
+2:46
+and I can look at all of them. And the
+2:48
+cool part is if I click on any one of
+2:50
+these satellites, I can suddenly track
+2:52
+them in orbit. So this is NORAD 11574
+2:58
+and we're tracking this puppy right now.
+2:59
+Here's another NORAD one. And you can
+3:01
+see the orbit and once I click on a
+3:02
+satellite, you can see the orbit around
+3:04
+the planet that it's in. Is it
+3:06
+geostationary, geocynchronous, etc. And
+3:09
+of course, you can jump between all of
+3:10
+the other satellites out there. So
+Real-time flight data (6,700+ planes)
+3:12
+that's in space. Once we start zooming
+3:14
+into the planet, we can also use Open
+3:15
+Sky to load in live flight data. So give
+3:18
+this a second to pop in. We've got 6.7K
+3:22
+flights that have been loaded in. I'm
+3:23
+going to turn off the tracking just to
+3:24
+show you this is like actual live data
+3:27
+right now. It's freaking crazy. We got
+3:29
+all the planes on the planet tracked in
+3:32
+real time against a 3D globe. So, if I
+3:35
+turn on detection mode over here, what's
+3:37
+cool about this is I can also go into
+3:39
+any of these planes and track their
+3:42
+location in real time. Check out how
+3:44
+cool this looks.
+3:46
+This looks like a freaking spy movie
+3:48
+right now. And so, like look, you can
+3:50
+make these as like real things to
+3:51
+monitor the situation. Obviously,
+3:53
+there's a lot going on in the world all
+3:54
+over the place. But if you want to also
+3:57
+you can use this to make some very, very
+3:59
+cool visualizations. I mean, just look
+4:01
+at this, ladies and gentlemen. Like why
+4:02
+would I go try and build this in After
+4:04
+Effects when I could do this in real
+4:06
+time in my browser and get all the bells
+4:08
+and whistles you want? Again, like if
+4:09
+you want to throw some bloom on top,
+4:11
+hey, you can throw some bloom there,
+4:12
+too. You want to sharpen the image. You
+4:14
+can create all the filters that you
+4:15
+want. Like the way you basically create
+4:17
+LUTs for your video editing tools and
+4:20
+add a bunch of post-processing effects,
+4:22
+you can do that all inside your browser.
+4:24
+Just tell the agent to code it for you.
+Military flight tracking via ADS-B
+4:26
+Now, this is really cool. But can you
+4:28
+also look at military flights? So
+4:30
+there's this website called ADSB that
+4:33
+essentially uses a bunch of crowdsourced
+4:35
+data to track all the military planes
+4:37
+that are on the planet right now. So all
+4:39
+the orange stuff that you see right now
+4:41
+are military planes that typically are
+4:43
+not tracked on these plane tracking
+4:45
+websites. But thanks to the wonderful
+4:47
+world of open source intelligence, you
+4:49
+can see what's going on on the other
+4:52
+side of the freaking world. Monitoring
+4:54
+the situation just got a whole lot
+4:56
+easier, ladies and gentlemen. Now, one
+4:58
+of the most beautiful things that you
+4:59
+can do with geospatial data is filter
+5:01
+stuff, right? So, I can isolate
+5:02
+basically all the military planes in
+5:03
+this case. I think it's absolutely
+5:05
+insane that I can go over the Pentagon,
+5:06
+zoom out and see which military flights
+5:08
+are happening nearby and jump into any
+5:10
+one of them and in real time see what
+5:12
+satellites are flying above you is kind
+5:15
+of crazy. Then you throw in the military
+5:17
+planes. Then you throw in all the
+5:19
+regular planes and oh my god, you have
+5:20
+built yourself a personal panopticon all
+5:23
+using open source data feeds. So that's
+5:25
+all real-time data. I want to get back
+Street traffic simulation
+5:27
+to more real-time data in a second, but
+5:29
+just to make the media point for you
+5:30
+all, you can also essentially get street
+5:33
+traffic up and running. So, I've got in
+5:35
+this case essentially using all the open
+5:37
+street map road network data, I can
+5:39
+query it and essentially spawn a
+5:41
+particle system that emulates city
+5:43
+traffic. Now, suddenly I've got tracked
+5:46
+points across the whole freaking London
+5:48
+Bridge in the city of London, baby. I
+5:50
+actually like doing just sparse labels
+5:52
+because that way I can show you the
+5:54
+whole freaking city. And especially when
+5:55
+I go into things like NVG, night vision
+5:58
+mode, and thermal mode, these things
+5:59
+look spectacular. So, let me ask
+6:01
+you this. Like, you could totally try
+6:03
+and make something like this in VO, but
+6:05
+why not just code it up and screen
+6:06
+record it? You get way more control this
+6:08
+way. What's really cool about this is
+6:10
+even places where Google doesn't have 3D
+6:12
+data. So, for example, Dubai doesn't
+6:14
+like, you know, US companies going and
+6:16
+3D scanning their stuff, this approach
+6:18
+will still work. So, that's the Burj
+6:19
+Khalifa. Like this is an oblique imagery
+6:21
+shot, right? So this is all off of
+6:22
+satellite imagery that's looking off
+6:24
+nater. That's why you got these this
+6:26
+perspective view. And if I turn on
+6:28
+street traffic over here, what you'll
+6:30
+notice is the road network's still going
+6:31
+to look beautiful. Let me jump back down
+6:33
+to ground level for a second and show
+6:35
+you real time CCTV. Essentially, what
+Real-time CCTV camera feeds
+6:37
+I've got going on is basically this
+6:39
+whole panel that I created that will let
+6:41
+me turn on CCTV cameras and pull from
+6:44
+the live CCTV cams that we have in
+6:49
+Austin, Texas. Now, the cool thing about
+6:51
+this is like this is all openly
+6:53
+available. You can see this right now.
+6:56
+Somebody whipping by. You've got like
+6:57
+some sort of first responder going
+6:58
+through. And this data updates at one
+7:01
+frame per minute. So, it's not real
+7:03
+time, but it's a real data of what's
+7:06
+actually going on in the city. And so,
+7:08
+when I pick one of these cameras, I can
+7:10
+jump to it immediately and actually see
+7:12
+it projected onto the 3D geometry. So,
+7:16
+as you can see, that's the same
+7:17
+crosswalk over here, and we've got, as
+7:19
+you saw, like the vehicles just updated.
+7:21
+So, this is insane, right? Like, I can
+7:23
+jump between realtime traffic feeds.
+7:26
+Honestly, this feels like this shouldn't
+7:28
+be legal, but it is. I'm working on an
+7:31
+even more sophisticated calibration
+7:33
+system where I can drop a couple points
+7:35
+and connect this that's going to make
+7:37
+this near perfect and figure out all the
+7:39
+shader stuff that I need so that it
+7:41
+looks very very realistic projected on.
+7:43
+So that's crazy y'all like realtime
+7:45
+camera feeds of my city. I mean this
+7:47
+stuff is just available. This is like
+7:48
+the type of stuff that I would have
+7:50
+spent hours in After Effects doing
+7:52
+fakery or like going into Google Earth
+7:54
+Studio exporting a video out popping it
+7:56
+in over here and trying to do different
+7:58
+cool things with it. like now you can
+7:59
+just do this. Like it's kind of insane.
+8:01
+I've also got tags of every single
+Earthquake & seismic data
+8:03
+earthquake, like basically seismic
+8:05
+activity that's happening across the
+8:06
+globe. So you can start layering this
+8:08
+thing up, right? Like you take this, you
+8:10
+throw the satellites on there, you throw
+8:11
+in some of the military flights, and
+8:13
+like suddenly you've got a pretty
+8:15
+freaking comprehensive picture of what's
+8:17
+going on. And I mean there's so many
+8:19
+other data streams that are on my road
+8:20
+map to add in here. This is just what I
+8:22
+could put together in the last couple
+The AI coding tools I used
+8:25
+days. Now, if you're wondering which
+8:27
+coding tool to use to make this stuff
+8:29
+happen, all of them work. I use Gemini
+8:31
+3.1 and Claude 4.6 and even codeex 5.2.
+8:35
+Actually, we're on codeex 5.3 now. The
+8:37
+whole point being like these numbers
+8:39
+going to keep changing. What you want to
+8:40
+do is actually get into the CLI tools.
+8:43
+I'm going straight into terminal and
+Running agents in parallel
+8:45
+telling the AI what I want. Often times,
+8:47
+I actually have OpenClaw running three
+8:49
+or four of these terminals at once. And
+8:51
+this way I can actually work on two
+8:53
+projects at once and I'm controlling
+8:54
+like four, six, eight different agents
+8:56
+to get these tasks done. So for example,
+8:58
+I had one agent building out all the
+9:00
+shaders on top. Right? The way this
+9:01
+works is like you have some of the
+9:03
+agents doing your style presets. Maybe
+9:04
+you have another agent that's going and
+9:06
+doing all the data integration to build
+9:08
+your particle system for street traffic
+9:10
+or military and flight data. And so
+9:12
+look, I think sky is the limit, right?
+9:13
+Like doing something like this in
+9:15
+Blender would have been order magnitude
+9:16
+harder. Doing it directly in code in my
+9:18
+browser. It's insane what you can do.
+9:20
+So, look, the crazy part about all of
+9:21
+this is like I worked on Google Maps,
+9:24
+right? I worked on this 3D tile data set
+9:25
+that's out in the world. And the biggest
+9:27
+thing we'd run into is like developers
+9:28
+would have such a steep learning curve
+9:31
+to make all of this stuff operate. Now,
+9:33
+you can do it, too. And I mean, the AI
+9:35
+isn't going to do it all for you. Like,
+9:36
+one of the issues I ran into when I was
+9:37
+doing this panoptic view is like it
+9:39
+would just spawn too many particles and
+9:40
+just like immediately crash the browser.
+9:42
+And so, basically, I told it, hey, do
+9:43
+like sequential loading. Why don't you
+9:45
+load in all the main roads first and
+9:47
+then get all the arterial roads? So
+9:49
+essentially, you're doing creative
+9:50
+problem solving as you're talking to the
+9:52
+system is go play with any of these
+9:53
+coding editors. So I would implore you
+Now is the time to build stuff yourself
+9:54
+if you haven't seen my videos in the
+9:56
+past on like vibe coding for creatives,
+9:58
+check that video out over here so you
+10:00
+get a feel for what it actually looks
+10:02
+like to build these things out. And if
+10:03
+you want to see more videos like this
+10:05
+where we basically explore all the cool
+10:06
+things that you can vibe code both for
+10:08
+creation and spatial understanding of
+10:10
+the world, let me know in the comments
+10:11
+below. Anyway, Bolavo signing off and
+10:13
+I'll see y'all in the next one. Cheers.
+
+Palantir's Al Targeting System Running the Iran War
+ transcript
+
+Chapter 1: What the Heck Does Palantir Actually Do?
+0:00So, what the heck does Palanteer actually do? Left click, right click, left click. Magically, it becomes a detection.
+0:088 secondsThis demo by the chief AI officer for the Department of War is perhaps the closest look we've gotten at Maven Smart System.
+0:1616 secondsThe AI powered software at the front lines of global conflicts today. The big bottleneck in modern warfare is the time
+0:2323 secondsit takes to target your adversary. And in the first 12 hours of the Iran War,
+0:2727 secondsthe US struck nearly 900 targets and over 13,000 targets in 38 days. This is a massive increase over the way things
+0:3636 secondsused to be. And central to that is Maven Smart System. I want to walk you through how this thing actually works and then show you how much of these capabilities
+0:4444 secondswe can actually build using commercial and off-the-shelf tools minus of course the missiles at the end because the applications for situational awareness
+0:5151 secondsgo way beyond the battlefield. And because TED is over, this is exactly why I've been heads down building God's Eye View into something bigger than a
+0:5959 secondsYouTube series. And if you've been asking me when you can actually use this stuff, you're going to want to stick around till the end. So, let's get into it.
+Chapter 2: The OODA Loop, Compressed
+1:081 minute, 8 secondsAll right, so there's this military concept called the UDA loop. Observe,
+1:121 minute, 12 secondsorient, decide, and act. This is honestly what you do when you wake up in the morning and decide to go get your coffee or eat a burrito in the evening.
+1:191 minute, 19 secondsThe key point though is your decision cycle needs to be faster than your adversary because if you do that, they can basically never catch up. They can't
+1:261 minute, 26 secondsorient. They can't plan. They're always in react mode. And the whole idea behind Maven is to compress that entire loop.
+1:321 minute, 32 secondsAnd we're going to walk through every single step so it's crystal clear. Okay.
+Chapter 3: How the Pentagon Picked Targets in Microsoft Office
+1:351 minute, 35 secondsFirst is the backstory. This was really interesting to get into because to understand why Maven exists, you need to understand what came before it.
+1:421 minute, 42 secondsAdversarial targets were tracked in Excel spreadsheets. PowerPoint was used for mapping network connections between all of them. Google Earth was there for
+1:501 minute, 50 secondszooming in and out. As one officer put it, "We've killed more people on Microsoft Office than you would ever imagine." I mean, just think about it.
+1:571 minute, 57 secondsThe modern commander with all the crazy sensor systems at his disposal is going into battle with Microsoft Office and Google Earth. Maven was created to fix
+2:062 minutes, 6 secondsall of that. Basically, Google Earth for war, but with AI telling you what's actually on the screen. All right, so here's what they built. What you're looking at are feeds from satellites,
+Chapter 4: Inside the Maven Smart System Demo
+2:142 minutes, 14 secondsdrones, signals, intelligence, prior map data, all layered together on a globe.
+2:192 minutes, 19 secondsYou can see which aerial assets are in the area, as well as different target designations. Now, we're seeing a drone view. You can see the vector outlines of the buildings that are highlighted. With
+2:272 minutes, 27 secondsa couple clicks, you load up your, let's say, road network data, so you can see how exactly to make it to that point.
+2:322 minutes, 32 secondsAnd then, when you zoom in, you see all these dots. These are basically detections made using computer vision.
+2:372 minutes, 37 secondsAnd you'll notice there's a number associated when you hover over them and nominate things to the board. That number is its stable identifier. The idea being that you can tell this is
+2:452 minutes, 45 secondsindeed the same card that let's say you're seeing in a satellite view versus a drone view versus CCTV. Then you can take these detections and nominate these
+2:522 minutes, 52 secondsto a literal cananban board like a task tracker where you can drag cards from todo to done. These vertical columns each have their own different process
+2:592 minutes, 59 secondsand they essentially represent what different teams would have been doing.
+3:023 minutes, 2 secondsOnce you've taken these detections, you can take advantage of other workflows to figure out what is the right asset to task to execute that target. You can choose different criteria. You can
+3:113 minutes, 11 secondsoptimize different metrics like time to target, how much fuel, munitions,
+3:143 minutes, 14 secondsdistance, etc. And from all of that, it gives you a recommendation that a human actually approves a plan which it goes about and executes or as the chief AI
+3:223 minutes, 22 secondsofficer put it in order to get to our desired instinct, actually closing a kill chain. So basically the Department of War loves this because Maven is taking something that used to take a
+3:313 minutes, 31 secondsroom full of analysts, right, to go generate that course of action for them.
+3:343 minutes, 34 secondsNow that entire complicated pipeline can all be collapsed down into one software that all these teams use to make the stuff happen. The AI starts recommending
+3:423 minutes, 42 secondswhich asset should prosecute that target, which drone, which missile system, which aircraft based on proximity, payload, rules of engagements, and then you approve that
+3:503 minutes, 50 secondsplan. So you go from like detection to strike decision in one system. And just for a second, imagine that this has been happening thus far in Microsoft Office
+3:573 minutes, 57 secondsand Google Earth. Now, let's map this to the UDA loop. The sensor feeds that are coming in, right? Like the satellites,
+4:034 minutes, 3 secondsaerial, drone, all that stuff. That's the observation. The system is fusing and classifying what it sees. That's orientation. The canban board and the
+4:114 minutes, 11 secondscourse of action generation, that's decision. And then finally, actioning the target. That's the acting bit. We're going to come back to this demo throughout the video cuz each section breaks down one step of this loop. Now,
+Chapter 5: Claude Is Inside Maven (And Anthropic Is Pushing Back)
+4:214 minutes, 21 secondshere's the part that's super complicated and controversial. There's pretty good consensus based on reporting that the AI that's doing this like natural language intelligence queries inside Maven,
+4:314 minutes, 31 secondsthat's Claude, built by Anthropic.
+4:334 minutes, 33 secondsAnthropic actually was one of the first to deploy large language models in classified military settings. In fact,
+4:384 minutes, 38 secondsthe Washington Post reported that Claude is central to the US campaign in Iran.
+4:424 minutes, 42 secondsBut Anthropic obviously drew a line which Daria got a lot of flack from the administration for. basically said, "You can use claude as long as it's not used
+4:504 minutes, 50 secondsfor fully autonomous weapon systems or mass domestic surveillance." The Trump administration replied by declaring anthropic a supply chain risk. Their argument was, "Hey, you're a contractor.
+5:005 minutesYou provide us the tool. You have no say over how it's actually used." And when you combine this with other reporting that seems to suggest that it's actually clawed 3.5 sonnet that's actually being
+5:095 minutes, 9 secondsused in the system, it really makes you think like, are these models actually good enough to deploy in the wild? So,
+5:145 minutes, 14 secondsthe AI company that first brought their large language model to a classified setting, that's a key part of this Maven smart system is now at the center of this battle with the government. And
+5:225 minutes, 22 secondsbased on recent reporting, it seems like a deal can still be struck. But the tension is very real. And we'll come back to this cuz it matters.
+Chapter 6: What Maven Can Actually See
+5:325 minutes, 32 secondsAll right, so Maven is obviously only as good as what it can see, the underlying data that is made available to it. So, let me show you what that actually is.
+5:395 minutes, 39 secondsObviously, you've got crazy spy satellites in orbit, keyhole stuff, the new things that SpaceX is building. You've got synthetic aperture radar,
+5:465 minutes, 46 secondswhich we've extensively covered in the past. Both military and commercial satellite systems like ISI and Capella Space that fire literal radar pulses
+5:545 minutes, 54 secondsthrough cloud through darkness that return 25 cm resolution imagery of the ground. We've covered this previously.
+5:595 minutes, 59 secondsVery dual use tech, the same stuff to figure out if a landslide's going to happen or if a bridge is about to break, is also critical to these kill chains.
+6:066 minutes, 6 secondsNow, here's the stuff that most people don't know about. wide area motion imagery or whammy. They started off with a system called Gorgon Stair. This is
+6:146 minutes, 14 secondsmounted on those classic MQ9 Reaper drones and basically it uses 368 cameras stitched together into a 1.8 gigapixel
+6:236 minutes, 23 secondscomposite image so that you can persistently surveil an entire small city from 25,000 ft. Think of this like Google Earth Live. If you've actually seen the movie Enemy of the State
+6:326 minutes, 32 secondsfeaturing Will Smith, this program was actually inspired by that movie. That's freaking wild to me. So the idea is once you've got this persistent image of absolutely everything, when something
+6:406 minutes, 40 secondsbad happens, let's say an IED goes off in Afghanistan, you can then rewind to see where that car originated from.
+6:466 minutes, 46 secondsThere's an even more advanced version of this called Argus is that can cover 36 square miles with enough resolution to track individual pedestrians. This way,
+6:546 minutes, 54 secondsas long as you have an airplane or a drone, you know, orbiting over a city,
+6:586 minutes, 58 secondsyou can figure out exactly what's happening on the ground in the past, in the present, and of course the future as well. So, if we go from wide area to narrow areas of monitoring, that's what
+7:077 minutes, 7 secondsyou might usually associate with drone footage, essentially FMV or full motion video. You've got these Reaper drones that are capable of taking these live
+7:147 minutes, 14 secondsfeeds directly into Maven for real-time object detection and classification. And what's interesting is that these drones can also now operate in GPS denied
+7:217 minutes, 21 secondsenvironments, right? Like which Iran obviously is and other conflict zones across the region. They're constantly getting jammed and spoofing GPS, right?
+7:287 minutes, 28 secondsYou can't rely on GPS in those scenarios. If you remember, we've talked about visual positioning systems in the past before where you can take a camera image, match it to a prior 3D model to
+7:377 minutes, 37 secondsfigure out exactly where that photo is taken. Drones use this technology, too.
+7:417 minutes, 41 secondsAnd Vantor's got something called the Raptor system that matches that onboard camera feed against their precision 3D terrain model. So, Vantor's used a 30cm
+7:497 minutes, 49 secondssatellite imagery to build this coarse 3D model of the world. And that becomes the key for it to figure out exactly where every drone photo was taken.
+7:587 minutes, 58 secondsSuddenly, the drone doesn't even need GPS. It knows where it is just based on the terrain. Now, as you probably saw with God's Eye View, one or two layers by themselves are only so interesting.
+8:078 minutes, 7 secondsBut when you start putting in different sources of intelligence together, that's where you get that classified grade picture. Signals intelligence is
+8:158 minutes, 15 secondsobviously a huge part of how these systems work. I'm talking intercepted communications, electronic emissions integrated alongside the imagery. We've
+8:238 minutes, 23 secondstalked about RF satellite constellations in orbit like Spire that do dark vessel detection, right? like vessels that are turning off their transponder. In
+8:308 minutes, 30 secondsaddition to that, you have entire shadow fleets, right, that are not just turning off their AIS, but they're actively masking or offiscating their presence.
+Chapter 7: Geolocating Shadow Fleets via Candy Crush
+8:388 minutes, 38 secondsBut there's another source of data that solves that problem, too. And that's called advertising intelligence. So,
+8:438 minutes, 43 secondssure, you're a shadow fleet. You're out in the wild. You've actually repainted your ship and you think you're scot-free. But turns out the people on board have a cluster of devices that
+8:528 minutes, 52 secondshave Candy Crush installed. You can use that ad network data to geollocate where that ship is. That's the world we live in. You can offiscate all other signals,
+9:009 minutesbut the fact that you've got some folks on board that like playing Candy Crush means you will be pinpointed. And then there's a secret one that's been
+9:079 minutes, 7 secondsreported lately, the RQ80, America's most classified stealth reconnaissance drone. It was publicly exposed for the first time during this war when it
+9:169 minutes, 16 secondsemergency landed at an air base in Greece this past March. It's a flying wing that's believed to operate at 60,000 ft plus for 24-hour autonomous
+9:239 minutes, 23 secondsmissions. And it's believed to have been tracking Iran's mobile missile launchers, the kind of targets that move and hide. You need that persistent overhead coverage to catch them. Now,
+9:339 minutes, 33 secondsdoes this have a SAR system on board? Is it something more like whammy? We just don't know, but I suspect it's a combination of modalities. Now, of
+9:409 minutes, 40 secondscourse, on top of all of this, you layer in commercial satellite imagery from like Vantor, Planet Labs, you've got the maritime AI tracking data. All of it gets fused together into one picture.
+9:509 minutes, 50 secondsThat's the observe step. Maven basically can see everything. Now the question is how do you make sense of it?
+Chapter 8: Orient, Decide, Act at War: Epic Fury & Kharg Island
+10:0010 minutesThis is where we go back to left click, right click, left click. This is orient,
+10:0310 minutes, 3 secondsdecide and act happening in one interface. Now watch what happens when you do this at scale. Obviously I've been covering Operation Epic Fury deeply on this channel. If you've seen those
+10:1110 minutes, 11 secondsGod's Eye View videos and our Hermos coverage, you know the timeline already.
+10:1510 minutes, 15 secondsNow, Epic Fury kicked off Feb 28th, and in the first 12 hours, the US struck nearly 900 targets across Iran. But perhaps the most dramatic single operation was Car Island. On March 13th,
+10:2510 minutes, 25 secondsthe US hit over 90 military targets simultaneously. I'm talking naval mine storage, missile bunkers, air defense systems in what Trump called one of the
+10:3410 minutes, 34 secondsmost powerful bombing raids in the history of the Middle East. Critically,
+10:3810 minutes, 38 secondsthe oil infrastructure was deliberately left intact. So, how do you coordinate 90 plus simultaneous strikes? Suddenly software like Maven earns its keep.
+10:4610 minutes, 46 secondsOrient, decide, act all premputed using the latest sensor data and executed and tasked in parallel. Now here comes the
+Chapter 9: The Speed–Accuracy Tradeoff
+10:5410 minutes, 54 secondscritical trade-off, right? Like is there a cost to speed? Is there a point at which Maven's accuracy surpasses that of a human analyst? And if it does, there's
+11:0111 minutes, 1 secondstill going to be a gap and at a large enough scale that gap is going to manifest itself in targets getting hit that shouldn't have been hit. I think this is where we're also going to have
+11:0911 minutes, 9 secondsto contend with how this technology is deployed in the wild. Right? The Department of War right now is a very clear stance. There are no fully autonomous weapon systems. Everything
+11:1711 minutes, 17 secondshas a human in the loop. But think about self-driving vehicles. At some point,
+11:2011 minutes, 20 secondsself-driving gets accurate enough where it's better than the average human driver. But if you add up enough of those drives, people are going to die.
+11:2711 minutes, 27 secondsAnd what happens when the systems make incorrect decisions? Like why was that incorrect decision made? Is it the model maker like Claude or Anthropic that's at
+11:3511 minutes, 35 secondsa fault here? Is it the sensor data perhaps that it was made on? or even underlying maps data. For example, the underlying map data that you have your
+11:4211 minutes, 42 secondsAI digest incorrectly classified a school, whose fault is that? Now, look,
+11:4611 minutes, 46 secondsthere are plenty more questions to get in here. But the broader question remains, when you're processing thousands of targets in 24 hours, what gets missed and who's at fault there?
+11:5611 minutes, 56 secondsAnd then the question gets heavier. Once these systems get good enough to justify not having a human in the loop, what happens when you're processing thousands of targets in a short period of time?
+12:0512 minutes, 5 secondsAnd to be clear, this isn't just Palanteer. Like Android has lattis,
+Chapter 10: The Same Tech Runs the NHS, WFP, and Airbus
+12:0812 minutes, 8 secondsright? Very similar concept, different platform. Take a bunch of these sensor systems together and create a fused operational picture of the battle space
+12:1512 minutes, 15 secondsand have AI handle the orient and decide steps. But this common operational picture isn't just useful on the battlefield. This is the same kind of
+12:2312 minutes, 23 secondsplatform. The same Palunteer technology actually runs the UK's NHS CO data system. It optimizes logistics for the
+12:3012 minutes, 30 secondsworld food programs. It runs Airbus's supply chain. Oil and gas giants use it to create incremental revenue opportunities. It catches money
+12:3812 minutes, 38 secondslaundering for banks. I mean this is the same udal loop, the same fusion layer just being applied to different problems.
+Chapter 11: Pulling Maven Apart — How to Build the Civilian Version
+12:4812 minutes, 48 secondsSo when you pull all these capabilities apart, the same pieces that the defense sector is using can be mapped to civilian capabilities that exist right
+12:5512 minutes, 55 secondsnow. So observe you've got the sensing layer, you can buy satellite imagery.
+12:5912 minutes, 59 secondsSAR imagery is also commercial. You've got capernicus and if you want to go low resolution, satellite and plane tracking data is effectively free. The more
+13:0613 minutes, 6 secondsexpensive thing is AIS ship tracking data, but that too is accessible. In countries like Japan, you have a plethora of CCTV camera feeds. You can fly your own drones. You can buy robots.
+13:1713 minutes, 17 secondsYou've got social media adtech data. All of this is stuff that you can either access or purchase. Then you have the Orient step. This is classification and
+13:2413 minutes, 24 secondsfusion. This is exactly what computer vision and large language models already do. Let's say you take your own personal security camera and give it to Meta Segment anything model. It can figure
+13:3313 minutes, 33 secondsout, hey, here are the objects in the scene. Then you give it to Claude or Gemini to tell you what those things are doing and it can infer the context of everything else that's going on. It can
+13:4213 minutes, 42 secondscheck to see, hey, you were supposed to get an Amazon delivery and that is indeed the person that's now showing up.
+13:4613 minutes, 46 secondsBasically, you can build your own AI layer that makes sense of all the data that's at your disposal. And this technology is available to everyone. I
+13:5413 minutes, 54 secondsmean, the more I use my own like Ring camera, I am so frustrated by how limited this thing is and the fact that it has to go to some centralized server
+14:0114 minutes, 1 secondto do such basic things for me annoys me, especially when I know the AI tools at my disposal are capable of so much more. And then finally, you have decide course of action generation, right? So,
+14:1114 minutes, 11 secondsfor the military, that means recommending a weapon and an asset. For us, it's things like what should you actually be paying attention to? What changed? What's anomalous? and have the
+14:1814 minutes, 18 secondssystem surface that automatically. Not a barrage of detections like unknown person detected at this time stamp that doesn't tell me anything and then act in
+14:2714 minutes, 27 secondsMaven. That's kinetics or deploying human assets. For us, it's decisions.
+14:3114 minutes, 31 secondsIt's knowing what's happening and being able to respond to it in near real time.
+Chapter 12: God's Eye View + Argus: The Roadmap
+14:3514 minutes, 35 secondsNow, I've already been building this and here's the road map. The first application is God's eye view. You've seen this tool evolving and I've been building it to fuse open source
+14:4214 minutes, 42 secondsintelligence into a common operational picture. what's happening in the world visualized the same way these military systems do it but with publicly
+14:5014 minutes, 50 secondsavailable data. You've seen it in my coverage of Epic Fury and Straight of Hermuz. And clearly y'all love it because it's the most unbiased perspective we can have without the
+14:5914 minutes, 59 secondsusual color of traditional media. And let me tell you, that's getting a lot more capabilities because now I've got a team. The second application is situational awareness for your own life.
+15:0815 minutes, 8 secondsYour own data, your own cameras, your own feed, your own context fused into the same kind of unified view, not surveillance. I'm talking about
+15:1615 minutes, 16 secondsawareness of what's happening in your sanctum sanctorum. You've got the map of the world and everything that's publicly available and then your own island that
+15:2415 minutes, 24 secondsyou control. Want to share it with others? Go for it. You want to keep it private, you can do that, too. Private by default and optionally sharable with
+15:3115 minutes, 31 secondsothers. I mean, the cool part is you can buy all of these fancy sensors. The AI is commercial, too. The only piece that doesn't exist is the fusion layer, the
+15:3915 minutes, 39 secondsthing that pulls all of this together into one picture. And that's what I'm building. Observe, orient, decide, act.
+Chapter 13: Close
+15:4515 minutes, 45 secondsThat's how all these platforms work. And honestly, that's how great decision-making works in general. You're probably just doing it slower without all of this technology. So, that's where
+15:5415 minutes, 54 secondsI'm going next. God's Eye View is the window to the world that we all deserve to see. I'm going to keep monitoring the global situation as it evolves, getting sharper, faster, and soon something that
+16:0216 minutes, 2 secondsyou can actually use yourself. And then there's the second surface, Argus. The same framework turned inwards to your world, your data, your context, so you
+16:1116 minutes, 11 secondscan create automations around the physical world that you can't even imagine today. So, this is what I hope you'll get clarity about what's
+16:1816 minutes, 18 secondshappening in the world, but then also your world. And by the way, if you can't wait for me to release this, so many of you reached out and I've responded to
+16:2516 minutes, 25 secondsyou giving you the ingredients so you can at least go make the viewer yourself. Just point your clanker of choice at my Substack post and they'll do a really good job. If you take my
+16:3316 minutes, 33 secondsYouTube video transcripts in addition to that, it'll take you rest of the way there. But if you are willing to be patient, I've got some really exciting updates coming for you very soon. Blavo
+16:4216 minutes, 42 secondssigning off and I'll see youall on the next one. Cheers.
+
+This Satellite Revealed Things We Were Never Meant to See
+transcript
+
+A convoy no camera can see
+0:00
+It's 2:00 a.m. Overcast, no moon in the
+0:03
+sky, and a column of vehicles is moving
+0:05
+across an unlit road [music] in Eastern
+0:07
+Europe. There's a thick cloud layer
+0:08
+sitting at 3,000 ft. Every commercial
+0:11
+imaging satellite overhead is completely
+0:13
+blind. They need light. They need clear
+0:15
+skies. Anyone watching from space with a
+0:18
+normal camera, nothing is there. But one
+0:22
+satellite in orbit, 400 miles up, fires
+0:24
+a radar pulse straight through the cloud
+0:27
+cover through the darkness and picks up
+0:30
+every vehicle on that [music] road. It
+0:32
+measures their speed, their heading, and
+0:34
+when one of them pulls off and parks
+0:35
+near a structure, it flags the change
+0:38
+down to the centimeter. No human looked
+0:40
+at this, and AI read [music] it in
+0:43
+seconds. This technology exists right
+0:45
+now. It's not classified, and some of it
+0:49
+is even free.
+0:53
+All right. So, the technology is called
+0:55
+synthetic aperture radar or SAR.
+What is Synthetic Aperture Radar?
+0:58
+Basically, satellites fire these like
+0:59
+microwave radar pulses [music] towards
+1:01
+the ground and measure what comes back.
+1:03
+Pretty standard stuff if you think about
+1:05
+it. But here's the clever bit. A single
+1:07
+radar antenna in space will give [music]
+1:08
+you this blurry image. It is not useful
+1:10
+at all. But if you think about it, these
+1:12
+satellites aren't static. They're moving
+1:13
+in orbit. [music] And as they do so,
+1:15
+they're collecting thousands of radar
+1:17
+returns from slightly different
+1:19
+positions. If you start stitching
+1:21
+[music] them all together, you're
+1:22
+basically faking a really long antenna
+1:25
+by combining all of those snapshots as
+1:27
+the satellite moves. That's where the
+1:29
+name comes from, synthetic aperture.
+1:32
+You're synthesizing a giant antenna from
+1:35
+this motion. [music] And what's kind of
+1:36
+nuts is that the result is a 25 cm
+1:40
+resolution [music] reproduction from
+1:42
+orbit. But what makes this technology
+1:44
+different from every single
+1:46
+electrooptical or just photo satellite
+1:48
+in [music] orbit is that SAR does not
+1:50
+care about clouds. It doesn't care about
+1:52
+darkness, smoke, or rain. Like these
+1:55
+optical satellites go completely [music]
+1:57
+blind in bad conditions. Meanwhile, SAR
+2:00
+just punches right through it. But
+2:01
+there's so much more interesting stuff
+InSAR: sub-millimeter change detection
+2:03
+this tech is capable of. There's a
+2:05
+specific technique called INSAR or
+2:07
+interferometric SAR. Basically, you take
+2:10
+a radar image of the same spot today and
+2:12
+then again several days later and you
+2:14
+start stacking them together. What this
+2:16
+lets you do is compare tiny phase
+2:18
+differences between all these snapshots.
+2:20
+And what you get is a deformation map.
+2:22
+Basically, a record of how much
+2:24
+something moved. And I'm not talking
+2:26
+coarse grain change detection. I'm
+2:28
+talking about sub millimeter precision
+2:30
+stuff that no human eye, not even most
+2:32
+physical sensors sitting on the
+2:34
+structure could even catch. Now, the
+2:36
+really high-res stuff is either
+2:37
+paytoplay or available for defense and
+2:40
+intelligence. But there is a satellite
+2:42
+constellation in orbit doing this for
+2:44
+free, and it's called Sentinel 1.
+2:49
+It covers a planet on a 12-day cycle,
+2:51
+and anyone can pull it. Pretty freaking
+2:53
+powerful for a free tool. So, what else
+2:55
+can you do with this all-weather
+2:57
+millimeter precise satellite data? You
+2:59
+start pointing at things that you could
+3:01
+not see before. Now, if you've seen SAR
+3:03
+mentioned anywhere before, it's probably
+3:05
+because of this because it went stupid
+They scanned inside a pyramid from space
+3:07
+viral. Researchers used a technique
+3:09
+called SAR Doppler tomography or Tomosar
+3:11
+[music]
+3:12
+from this Italian Cosmos SkyAD satellite
+3:14
+and they used it to map the interior of
+3:17
+the Great Pyramid of Giza from space.
+3:19
+[music] And I want to be precise about
+3:21
+how this thing actually works because
+3:22
+it's wilder than just radar sees through
+3:25
+stone. The radar isn't actually passing
+3:27
+through the limestone like an X-ray.
+3:28
+Cosmo Sky uses something called Xband.
+3:30
+[music] We're talking about a 3 cm
+3:32
+wavelength that bounces off surfaces.
+3:35
+What the researchers actually did is
+3:37
+analyze the micro vibrations of the
+3:39
+pyramid itself. Like literally just the
+3:42
+earth humming like seismic [music]
+3:44
+background noise that propagates through
+3:46
+the structure differently depending on
+3:49
+what's inside. So voids, chambers,
+3:52
+density changes. The satellite can read
+3:55
+those tiny Doppler shifts in the
+3:58
+reflected signal and basically
+4:00
+reconstruct a coarse 3D map of what's
+4:03
+[music] in there. And by the way, this
+4:05
+is peer-reviewed and published in remote
+4:07
+sensing literature. To put it simply,
+4:09
+they map the inside of a 4500year-old
+4:12
+pyramid from a space by listening to it
+4:15
+vibrate. That is freaking cool.
+These cities are sinking faster than sea levels rise
+4:21
+And of course, it doesn't just stop at
+4:23
+ancient monuments. Going back to Insar
+4:25
+for a second, that technique shows the
+4:27
+ground beneath the world's biggest river
+4:30
+delta cities. Think Jakarta, Bangkok,
+4:33
+Shanghai. And what it shows us is that
+4:35
+these cities are sinking faster than the
+4:37
+sea levels are rising. Like this tech
+4:39
+can literally detect sinkhole formation
+4:41
+weeks before the ground opens. And after
+4:44
+you have natural disasters like
+4:45
+earthquakes or floods, it tells first
+4:48
+responders which structures have shifted
+4:50
+before [music] anyone sets foot near
+4:52
+them. The crazy part is this data has
+4:54
+been sitting there for years. It's just
+4:55
+a matter of reading it. Now, let's talk
+4:58
+about things that aren't supposed to
+4:59
+move too damn much, and that of course
+North American bridges are the worst on Earth
+5:01
+are bridges.
+5:03
+So, a team of researchers analyzed 744
+5:07
+longspan bridges globally using the
+5:09
+stacked Sentinel 1 data and published
+5:11
+this in Nature Communications in October
+5:14
+of 2025. And the findings kind of blew
+5:16
+my mind. Basically, North American
+5:18
+bridges are in worse shape than African
+5:20
+bridges, worse than anywhere else on the
+5:23
+planet. I mean, this is literally aging
+5:25
+infrastructure. Like there are literally
+5:27
+46,000 structurally deficient bridges
+5:30
+out there in America and most of them
+5:31
+get like a physical inspection [music]
+5:33
+every two years. Someone drives out,
+5:35
+looks at it, writes a report. These
+5:37
+satellites on the other hand can watch
+5:39
+all of them every 12 days automatically.
+5:42
+And this richer data even had the
+5:43
+opposite effect. Like when they added
+5:45
+satellite monitoring to the mix, it cut
+5:47
+a bunch of these high-risisk
+5:48
+classifications on bridges by a third.
+5:50
+Meaning a bunch of these bridges that we
+5:53
+thought were about to fall were actually
+5:55
+fine. and the ones that were genuinely
+5:57
+at [music] risk. We catch them way
+5:59
+earlier. And by the way, since this is
+6:02
+Sentinel 1, the data is free. Now, let's
+6:06
+take the same SAR data, but pointed at a
+6:08
+different area of interest. A team at
+An AI caught a village built on a landslide
+6:09
+the University of Melbourne built this
+6:11
+like physicsguided [music]
+6:12
+machine learning system that basically
+6:14
+takes all the Sentinel 1 data, puts it
+6:16
+through an AI that's trained on how
+6:18
+ground actually fails. I'm talking about
+6:20
+like soil particles separating, micro
+6:22
+fractures propagating, essentially
+6:24
+generating a risk map that highlights
+6:26
+unstable slopes before anything visible
+6:29
+happens on the surface. And they pointed
+6:31
+at a village called Kim Tang in central
+6:33
+Nepal. And here's where this gets really
+6:35
+heavy. Like the people living in this
+6:37
+village [music] had been relocated there
+6:39
+in 2019 after a landslide destroyed
+6:42
+their previous village. The government
+6:43
+obviously moved them there thinking this
+6:45
+was a safe location. And this AI model
+6:47
+flags a massive high-risk zone
+6:50
+completely in red beneath that village.
+6:52
+They were quite literally [music] moved
+6:53
+to the most dangerous spot in the
+6:55
+region. And nobody had any idea until an
+6:59
+AI read the radar data from space to
+7:02
+catch it. Jumping across continents, the
+7:04
+Brits, the British Geological Survey ran
+7:06
+the same approach across all of Great
+7:08
+Britain. We're talking about 300,000
+7:11
+slopes that were analyzed and they found
+7:12
+[music] that 3,000 of those were
+7:14
+actively moving affecting about 14,000
+7:17
+km of road and 360 km of railway. Then
+7:21
+after the 2025 Simantra landslides, the
+7:24
+same group applied their expertise
+7:26
+halfway across the world [music] to map
+7:28
+over 4,000 landslide sites in a single
+7:31
+pass. What's crazy is this analysis used
+7:33
+to take [music] months, sometimes even
+7:35
+years. Now you can run it in the order
+7:37
+of hours. That's where AI and
+7:39
+distributed computing [music] has been a
+7:41
+huge unlock. We're not just collecting
+7:43
+this data, but reading it and analyzing
+7:45
+at a scale that no human team ever
+7:48
+could.
+The commercial SAR arms race
+7:51
+All right, so this is where it stops
+7:53
+becoming a science story and becomes a
+7:55
+geopolitical one. You've got eyesight.
+7:57
+This is a Finnish company that operates
+7:59
+the world's largest commercial SAR
+8:02
+constellation. [music]
+8:02
+And they launched five new satellites in
+8:04
+November 2025, then six more on March
+8:07
+30th, like just a few days ago, on a
+8:10
+SpaceX [music] Falcon 9 out of
+8:12
+Vanderberg Space Force Base. I'm talking
+8:14
+25 cm immaculate resolution. And their
+8:17
+customers include the Polish armed
+8:19
+forces, the Portuguese Air Force, BAE
+8:22
+Systems, and even the insurance giant
+8:24
+AX8. And ISIA is not alone. You've got
+8:27
+Capella Space, you got Umbra, you got
+8:29
+Sinsspective. There is a whole
+8:31
+commercial SAR industry that basically
+8:34
+didn't exist a decade ago. And this
+8:36
+year, NASA selected ISAI as one of their
+8:39
+seven commercial SAR providers for
+8:41
+Earth's science research. But like I
+8:43
+said, this is where we go beyond the
+8:44
+science. And the reason nations and
+8:47
+defense contractors alike are buying
+8:49
+into commercial SAR constellations
+8:50
+[music]
+8:51
+at this space is because of what comes
+8:54
+next. Now, everything we've talked about
+8:55
+so far, pyramids, sinking cities,
+8:57
+bridges, landslides, that's the civilian
+8:59
+side. We're talking about the same
+GMTI: tracking convoys in the dark
+9:01
+technology, but militaries around the
+9:03
+world are using it for a very different
+9:05
+purpose. One of these capabilities is
+9:07
+called GMTI or ground moving target
+9:10
+indication. Basically, SAR filters out
+9:12
+everything that isn't moving. The
+9:14
+ground, the buildings, the trees are all
+9:15
+gone. And anything that's left is in
+9:17
+motion. I'm talking vehicles, ships,
+9:20
+convoys in the dark through the clouds.
+9:22
+And if you've got longer wavelengths
+9:24
+through jungle canopy, the military
+9:26
+calls this faux pen or foliage
+9:28
+penetration radar. Essentially, you can
+9:30
+detect vehicles and even [music] people
+9:33
+hidden under very dense tree cover from
+9:35
+an aircraft. That is real tech and it
+9:38
+exists right now. The US military
+9:39
+actually used to do a version of this
+9:41
+from an aging aircraft called the E8J
+9:43
+stars. Basically, you circle overhead
+9:45
+and tracked ground movements. That
+9:47
+plane, of course, is retired now, but
+9:49
+what replaces it is not another plane.
+9:52
+It's a constellation of satellites that
+9:54
+do the same thing from orbit
+9:57
+continuously. The Space Force and the
+9:59
+NRO or the National Reconnaissance
+10:01
+Office are building exactly that
+10:03
+capability. GMTI satellites launching in
+10:06
+2028 at full operational capacity. We're
+10:08
+talking about tracking every moving
+10:10
+ground target globally [music]
+10:12
+in near real time. And that's not far
+10:14
+away. They're targeting the 2030s. But
+10:17
+it's not just the ground that the
+10:18
+military cares about. Of course, it's
+10:20
+the air. And so they're working on the
+10:22
+next step, AMTI, air moving target
+10:25
+indication. Essentially targeting
+10:26
+aircraft from orbit. This one is
+10:28
+significantly harder because planes move
+10:30
+an order of magnitude faster than ground
+10:32
+vehicles and the ground clutter masks
+10:34
+their radar signature. So this tech in
+10:36
+particular is an active development.
+10:38
+You've got some great experimental
+10:40
+results, but it's further out. But know
+10:41
+that it's coming, just not on the same
+10:43
+timeline. And then of course AI closes
+10:45
+the loop. Booze Allen built a system for
+10:47
+the Air Force that takes all the SAR
+10:49
+data and automatically classifies ground
+10:51
+vehicles like five classes greater than
+10:53
+90% accuracy train in 5 months using
+10:56
+synthetic SAR images because there just
+10:58
+wasn't enough real data. NATO is also
+11:01
+working on the same thing at alliance
+11:02
+scale. [music] If you start chaining it
+11:04
+all together, persistent star
+11:05
+constellations, GMTI filtering, AI
+11:08
+classification, and you get a system
+11:10
+that watches every road in every
+11:12
+country, flags anything that moves,
+11:15
+identifies what it is, and tells a human
+11:17
+within minutes. So, if you remember that
+11:19
+convoy at the start of the video, that
+11:21
+is not a hypothetical. That's an
+11:23
+acquisition schedule. Now, there's a
+11:25
+couple other interesting things on the
+NISAR: the billion-dollar SAR satellite
+11:26
+horizon. Last year, NASA and ISRO,
+11:28
+India's space organization, launched
+11:30
+Nissar. All L4 engines generating
+11:33
+nominal thrust 139 motor ignited.
+11:37
+This is for global monitoring and not
+11:38
+spying. But for that purpose, it is the
+11:40
+[music] most advanced SAR satellite ever
+11:43
+built at an estimated cost of a billion
+11:45
+half dollars. This joint US [music]
+11:47
+India mission can map every ecosystem on
+11:50
+Earth. I'm talking glaciers, forests,
+11:52
+wetlands, [music] farmlands at
+11:54
+centimeter level precision every 12
+11:56
+days. And the data is already coming in.
+12:00
+On the commercial side, the [music] push
+12:01
+is towards what Capella calls Earth
+12:03
+intelligence infrastructure. So not just
+12:05
+raw data, but [music] processed insights
+12:07
+delivered to operational workflows in
+12:09
+near real time. Essentially, think of it
+12:11
+like monitoring as a [music] service.
+12:13
+You don't have to parse all the data
+12:15
+yourself. You subscribe to be notified
+12:17
+for the kinds of change you care about,
+12:19
+and you get that data directly. And to
+12:21
+be honest, the final unlock with all of
+12:23
+this stuff is just time. So, as I
+12:25
+mentioned, Sentinel 1 revisits the same
+12:27
+spot on Earth every 12 days. That's
+12:29
+pretty useful. But as more and more
+12:31
+constellations come online, [music]
+12:33
+these revisit rates drop to hours and
+12:36
+then minutes. And at some point, you're
+12:38
+no longer looking at snapshots of the
+12:41
+Earth anymore. You are watching it
+12:43
+[music] live. All of it all the time.
+The part that should make you uneasy
+12:46
+Soar is some insanely cool and powerful
+12:48
+tech.
+12:48
+[music]
+12:49
+It's one technology, radar from space,
+12:51
+and it can tell you which bridge is
+12:53
+about to fall, which hillside is about
+12:55
+to collapse, and what's hidden inside a
+12:58
+4500year-old [music]
+12:59
+pyramid. AI can now analyze it faster
+13:02
+than any human team [music] ever could.
+13:04
+And every month, more satellites go up.
+13:06
+So, on one hand, we can respond to
+13:08
+landslides, monitor critical
+13:10
+infrastructure, respond to disasters
+13:12
+faster than ever before, and that is
+13:15
+genuinely transformative. On the other
+13:17
+hand, that exact same technology can
+13:19
+track every vehicle on a grid in pitch
+13:21
+[music] black through heavy cloud cover
+13:23
+with an AI automatically cataloging
+13:26
+every single target. Now, the capability
+13:27
+is already here and more of it is coming
+13:30
+online, so you should know about it, but
+13:32
+what we do with it, that's the part
+13:34
+that's still being written. Now, SAR is
+13:36
+really cool, but if you're curious about
+13:37
+how to use radio frequency as a sensing
+13:40
+modality using like Wi-Fi or even 5G to
+13:43
+figure out what's going on in the world,
+13:45
+check out [music] this video over here.
+13:46
+Bavo signing off and I'll see y'all in
+13:49
+the next one. Cheers.
+

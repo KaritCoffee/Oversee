@@ -1,53 +1,49 @@
 # Oversee
 
-Oregon-first public camera monitor prototype.
+Free-source public intelligence command center prototype.
 
-## What is in this repo
+## What It Does
 
-- A no-dependency dashboard prototype in [index.html](./index.html)
-- Seeded Oregon source and feed catalog in [data.js](./assets/data.js)
-- Pacific Northwest operations-room styling in [styles.css](./assets/styles.css)
-- Product and research plan in [oregon-public-camera-dashboard-plan.md](./docs/oregon-public-camera-dashboard-plan.md)
+Oversee is a browser-based operations console inspired by WorldView-style geospatial tools. It now defaults to a global scope and fuses free public data sources:
 
-## Current status
+- Global/US camera inventory with official no-key adapters for NYC DOT, Caltrans, Transport for London JamCams, Iowa DOT, Ireland TII, Toronto, Florida 511, Georgia DOT, KYTC/Indiana TrafficWise, Redmond, and Lawrence
+- 3D globe with selectable cameras, satellites, flights, earthquakes, and alerts
+- CelesTrak satellite GP data with approximate live orbital positioning and path arcs
+- OpenSky public aircraft states with heading trails when anonymous rate limits allow access
+- USGS all-day earthquake GeoJSON feed without magnitude filtering
+- National Weather Service active alerts for US scopes
+- Alert cards that show affected areas and center the 3D globe on the selected alert
+- Leaflet/OpenStreetMap global camera map
+- Sensor modes for CRT, night vision, FLIR-style, and clean viewing
 
-This is now a runnable local prototype with a lightweight built-in Node server.
+## Free Now, Paid Later
 
-It includes:
+The current build intentionally uses free public sources. Good paid upgrades later would be photorealistic 3D tiles, commercial ADS-B, AIS maritime data, archived replay storage, and commercial satellite imagery.
 
-- Statewide Oregon source registry
-- Seeded city and town camera coverage
-- In-dashboard watch pane with best-effort embedded camera views
-- Slippy Oregon camera map with clickable feed markers
-- Operations Theater map with Oregon cameras plus public earthquake, alert, and best-effort flight layers
-- Live adapter snapshots for TripCheck, OHAZ / ALERTWest, Salem, and Newport
-- Filters for region, category, media type, and city/town-only mode
-- Public data layer recommendations for weather, wildfire, traffic, transit, air quality, and hydrology
+## Run Locally
 
-## Run locally
-
-From the repo root, run:
+From the repo root:
 
 ```powershell
 node .\server.js
 ```
 
-Then open:
+Open the URL printed in the terminal, usually:
 
-- the URL printed in the terminal, usually [http://localhost:4173](http://localhost:4173)
+[http://localhost:4173](http://localhost:4173)
+
+If `4173` is busy, the server automatically tries `4183`, `4193`, `4203`, then `4303`.
 
 Optional:
 
-- If `4173` is occupied, the server automatically falls back to `4183`, `4193`, `4203`, then `4303`.
 - Set `PORT` before starting if you want a specific port.
-- Set `OPENSKY_TOKEN` if you want the flight layer to use an authenticated OpenSky bearer token when available.
-- You can also double-click [run-oversee.bat](./run-oversee.bat) to launch it from Explorer. It will keep a console window open and print the active URL.
+- Set `OPENSKY_TOKEN` if you have an OpenSky bearer token.
+- Double-click [run-oversee.bat](./run-oversee.bat) to launch from Explorer.
 
-## Recommended next build step
+## Notes
 
-Extend the live adapter layer to:
+Satellite positions are generated from public CelesTrak element data with a lightweight browser-friendly approximation. They are good for visualization and situational context, not precision orbital analysis.
 
-1. ODOT TripCheck
-2. OHAZ / ALERTWest
-3. City of Salem traffic camera viewer
-4. City of Newport webcam
+Some public cameras expose true live players or HLS playlists, while many transportation cameras expose refreshed still images. The UI labels those differently, validates HLS streams before playing them, and auto-refreshes still images so the dashboard does not pretend a still image is video.
+
+The main public-signal snapshot refreshes every 60 seconds. Flight positions, alerts, and earthquake counts update when the upstream public APIs respond; camera stills refresh at each source's published or inferred interval.
