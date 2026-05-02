@@ -327,19 +327,20 @@ a {
 
 .world-theater {
   position: relative;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
-  min-height: 690px;
   overflow: hidden;
 }
 
 .theater-head {
-  position: absolute;
-  top: 16px;
-  left: 18px;
+  position: relative;
   z-index: 4;
   display: flex;
   gap: 12px;
   align-items: flex-start;
+  justify-content: space-between;
+  padding: 22px 28px 0;
 }
 
 .theater-head h1,
@@ -383,14 +384,13 @@ a {
 }
 
 .metric-strip {
-  position: absolute;
-  top: 20px;
-  right: 18px;
+  position: relative;
   z-index: 4;
   display: grid;
   grid-template-columns: repeat(4, minmax(120px, 1fr));
   gap: 8px;
-  width: min(54%, 780px);
+  width: auto;
+  margin: 18px 28px 0;
 }
 
 .metric-card {
@@ -426,8 +426,11 @@ a {
 }
 
 .stage {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  flex: 1 1 auto;
+  height: clamp(560px, 58vh, 780px);
+  min-height: 520px;
+  margin-top: 12px;
   overflow: hidden;
   background:
     radial-gradient(circle at center, rgba(0, 183, 255, 0.1), transparent 42%),
@@ -1238,6 +1241,20 @@ a {
   scroll-margin-top: 88px;
 }
 
+.camera-map-panel .section-head {
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+#cameraMapMeta {
+  max-width: 100%;
+  color: #d8e7f5;
+  font-family: var(--mono);
+  font-weight: 800;
+  text-align: right;
+}
+
 .camera-filter-row {
   display: flex;
   flex-wrap: wrap;
@@ -1551,9 +1568,27 @@ a {
   .topbar,
   .ops-grid,
   .lower-grid,
-  .watch-grid,
-  .camera-map-section {
+  .watch-grid {
     grid-template-columns: 1fr;
+  }
+
+  .camera-map-section {
+    grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+    grid-template-areas:
+      "map watch"
+      "catalog catalog";
+  }
+
+  .camera-map-panel {
+    grid-area: map;
+  }
+
+  .catalog-panel {
+    grid-area: catalog;
+  }
+
+  .camera-watch-panel {
+    grid-area: watch;
   }
 
   .topbar {
@@ -1562,15 +1597,11 @@ a {
   }
 
   .metric-strip {
-    position: relative;
-    top: auto;
-    right: auto;
-    width: auto;
-    margin: 92px 18px 0;
+    margin-inline: 18px;
   }
 
   .world-theater {
-    min-height: 760px;
+    min-height: 0;
   }
 
   .right-rail {
@@ -1578,7 +1609,7 @@ a {
   }
 
   .camera-watch-panel {
-    position: static;
+    position: sticky;
   }
 }
 
@@ -1625,18 +1656,26 @@ a {
   .right-rail,
   .source-grid,
   .watch-detail,
-  .donut-wrap {
+  .donut-wrap,
+  .camera-map-section {
     grid-template-columns: 1fr;
   }
 
+  .camera-map-section {
+    grid-template-areas:
+      "map"
+      "watch"
+      "catalog";
+  }
+
   .world-theater {
-    min-height: 720px;
+    min-height: 0;
   }
 
   .theater-head {
-    right: 14px;
     flex-direction: column;
     gap: 8px;
+    padding: 18px 14px 0;
     max-width: calc(100% - 36px);
   }
 
@@ -1645,7 +1684,7 @@ a {
   }
 
   .selection-card {
-    top: 575px;
+    top: 14px;
     left: 12px;
     width: calc(100% - 24px);
   }
@@ -1663,5 +1702,9 @@ a {
 
   .camera-map {
     height: 360px;
+  }
+
+  .camera-watch-panel {
+    position: static;
   }
 }
