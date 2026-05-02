@@ -11,6 +11,7 @@ Oversee is a browser-based operations console inspired by WorldView-style geospa
 - CelesTrak satellite GP data with approximate live orbital positioning and path arcs
 - OpenSky public aircraft states with heading trails when anonymous rate limits allow access
 - USGS all-day earthquake GeoJSON feed without magnitude filtering
+- NASA FIRMS VIIRS near-real-time fire hotspot layer when a local FIRMS map key is configured
 - National Weather Service active alerts for US scopes
 - Alert cards that show affected areas and center the 3D globe on the selected alert
 - Leaflet/OpenStreetMap global camera map
@@ -38,6 +39,7 @@ Optional:
 
 - Set `PORT` before starting if you want a specific port.
 - Set `OPENSKY_TOKEN` if you have an OpenSky bearer token.
+- Set `NASA_FIRMS_MAP_KEY`, `FIRMS_MAP_KEY`, or create an ignored `config.local.json` with `nasaFirmsMapKey` to enable NASA FIRMS fire hotspots.
 - Double-click [run-oversee.bat](./run-oversee.bat) to launch from Explorer.
 
 ## Windows Desktop App

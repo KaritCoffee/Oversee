@@ -30,6 +30,7 @@
     { id: "satellites", label: "Satellites", color: "#b85cff", icon: "satellite" },
     { id: "flights", label: "Flights", color: "#ffb02e", icon: "plane" },
     { id: "quakes", label: "Quakes", color: "#ff4e57", icon: "activity" },
+    { id: "fires", label: "Fires", color: "#ff7a1a", icon: "flame" },
     { id: "alerts", label: "Alerts", color: "#18f0a0", icon: "bell-ring" },
   ];
 
@@ -94,6 +95,7 @@
     satellites: "#b85cff",
     flights: "#ffb02e",
     quakes: "#ff4e57",
+    fires: "#ff7a1a",
     alerts: "#18f0a0",
     traffic: "#1aa7ff",
     city: "#19e2ff",
@@ -599,7 +601,7 @@
     const values = [
       { label: "Public Signals", value: snapshot.metrics.eventsToday, delta: "+ live" },
       { label: "Active Alerts", value: snapshot.metrics.alerts, delta: `${snapshot.alerts.length} official` },
-      { label: "Tracked Assets", value: snapshot.metrics.assets, delta: `${activeLayers} layers` },
+      { label: "Fire Hotspots", value: snapshot.fires?.length || 0, delta: "NASA FIRMS" },
       { label: "Camera Feeds", value: snapshot.metrics.cameraFeeds || snapshot.cameras.length, delta: `${livePlayers} playable video feeds` },
     ];
 
@@ -664,6 +666,7 @@
       snapshot.satellites.length,
       snapshot.flights.length,
       snapshot.quakes.length,
+      snapshot.fires?.length || 0,
       snapshot.alerts.length,
     ];
     const total = values.reduce((sum, value) => sum + value, 0);
@@ -1170,6 +1173,7 @@
     if (state.layers.satellites) addMarkers("satellites", filterByQuery(snapshot.satellites), "satellite");
     if (state.layers.flights) addMarkers("flights", filterByQuery(snapshot.flights), "flight");
     if (state.layers.quakes) addMarkers("quakes", filterByQuery(snapshot.quakes), "quake");
+    if (state.layers.fires) addMarkers("fires", filterByQuery(snapshot.fires || []), "fire");
     if (state.layers.alerts) addMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
     renderSelectedGlobeFocus();
   }
@@ -1182,6 +1186,7 @@
     if (state.layers.satellites) addCesiumMarkers("satellites", filterByQuery(snapshot.satellites), "satellite");
     if (state.layers.flights) addCesiumMarkers("flights", filterByQuery(snapshot.flights), "flight");
     if (state.layers.quakes) addCesiumMarkers("quakes", filterByQuery(snapshot.quakes), "quake");
+    if (state.layers.fires) addCesiumMarkers("fires", filterByQuery(snapshot.fires || []), "fire");
     if (state.layers.alerts) addCesiumMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
     renderCesiumSelection();
   }
@@ -1190,7 +1195,7 @@
     const source = cesiumGlobe.sources[layerId];
     if (!source || !globalThis.Cesium) return;
     const Cesium = globalThis.Cesium;
-    const max = type === "camera" ? 1400 : type === "satellite" ? 900 : type === "flight" ? 1200 : type === "quake" ? 700 : 260;
+    const max = type === "camera" ? 1400 : type === "satellite" ? 900 : type === "flight" ? 1200 : type === "quake" ? 700 : type === "fire" ? 1200 : 260;
     const visible = sampleItems(items, max);
     for (const item of visible) {
       const lat = Number(item.lat);
@@ -1318,6 +1323,7 @@
     if (type === "satellite") return clamp(Number(item.altitudeKm || 550), 220, 36000) * 1000;
     if (type === "flight") return clamp(Number(item.altitudeMeters || 11000), 1200, 16000);
     if (type === "quake") return 16000;
+    if (type === "fire") return 30000;
     if (type === "alert") return 24000;
     return 9000;
   }
@@ -1327,12 +1333,13 @@
     if (type === "satellite") return 7;
     if (type === "flight") return 8;
     if (type === "alert") return 10;
+    if (type === "fire") return 8 + clamp(Number(item.frp || 0) / 40, 0, 10);
     return 6;
   }
 
   function addMarkers(layerId, items, type) {
     const group = globe.groups[layerId];
-    const max = type === "satellite" ? 700 : type === "flight" ? 620 : type === "quake" ? 420 : 260;
+    const max = type === "satellite" ? 700 : type === "flight" ? 620 : type === "quake" ? 420 : type === "fire" ? 720 : 260;
     const visible = sampleItems(items, max);
     for (const item of visible) {
       const color = item.displayColor || COLORS[layerId] || colorForType(type);
@@ -1340,7 +1347,11 @@
       const lng = Number(item.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
       const altitude = type === "satellite" ? clamp((item.altitudeKm || 550) / 18000, 0.035, 0.62) : type === "flight" ? 0.045 : 0.018;
-      const size = type === "quake" ? 0.028 + clamp((item.magnitude || 1) / 80, 0, 0.06) : type === "satellite" ? 0.038 : 0.052;
+      const size = type === "quake"
+        ? 0.028 + clamp((item.magnitude || 1) / 80, 0, 0.06)
+        : type === "fire"
+          ? 0.034 + clamp((item.frp || 1) / 1800, 0, 0.045)
+          : type === "satellite" ? 0.038 : 0.052;
       const sprite = makeSprite(color, size);
       sprite.position.copy(latLngToVector3(lat, lng, 2.02 + altitude));
       sprite.userData = { type, item, baseScale: size, phase: Math.random() * Math.PI * 2 };
@@ -2032,6 +2043,7 @@
     if (type === "satellite") return snapshot.satellites.find((item) => item.id === id);
     if (type === "flight") return snapshot.flights.find((item) => item.id === id);
     if (type === "quake") return snapshot.quakes.find((item) => item.id === id);
+    if (type === "fire") return (snapshot.fires || []).find((item) => item.id === id);
     if (type === "alert") return snapshot.alerts.find((item) => item.id === id);
     return null;
   }
@@ -2128,6 +2140,7 @@
     if (state.layers.satellites) assets.push(...snapshot.satellites.map((item) => ({ type: "satellite", item })));
     if (state.layers.flights) assets.push(...snapshot.flights.map((item) => ({ type: "flight", item })));
     if (state.layers.quakes) assets.push(...snapshot.quakes.map((item) => ({ type: "quake", item })));
+    if (state.layers.fires) assets.push(...(snapshot.fires || []).map((item) => ({ type: "fire", item })));
     if (state.layers.alerts) assets.push(...snapshot.alerts.map((item) => ({ type: "alert", item })));
     if (state.layers.cameras) assets.push(...getFilteredCameras().slice(0, 16).map((item) => ({ type: "camera", item })));
     return filterAssetsByQuery(assets);
@@ -2140,6 +2153,7 @@
       ...snapshot.satellites.map((item) => ({ type: "satellite", item })),
       ...snapshot.flights.map((item) => ({ type: "flight", item })),
       ...snapshot.quakes.map((item) => ({ type: "quake", item })),
+      ...(snapshot.fires || []).map((item) => ({ type: "fire", item })),
       ...snapshot.alerts.map((item) => ({ type: "alert", item })),
     ]);
   }
@@ -2187,6 +2201,7 @@
       satellites: [],
       flights: [],
       quakes: [],
+      fires: [],
       alerts: [],
       traffic: [],
       events: cameras.slice(0, 6).map((camera) => ({
@@ -2370,6 +2385,18 @@
         ["Source", "USGS"],
       ];
     }
+    if (type === "fire") {
+      return [
+        ["Confidence", item.confidence || "unknown"],
+        ["FRP", item.frp ? `${Math.round(item.frp)} MW` : "unknown"],
+        ["Brightness", item.brightness ? `${Math.round(item.brightness)} K` : "unknown"],
+        ["Instrument", item.instrument || "VIIRS"],
+        ["Satellite", item.satellite || "unknown"],
+        ["Time", formatShortTime(item.time)],
+        ["Position", formatLatLng(item.lat, item.lng)],
+        ["Source", "NASA FIRMS"],
+      ];
+    }
     if (type === "alert") {
       return [
         ["Event", item.event || "Alert"],
@@ -2390,6 +2417,7 @@
     if (type === "satellite") return `${item.objectType || "Satellite"} | ${item.altitudeKm ? `${Math.round(item.altitudeKm)} km` : "orbit"} | CelesTrak`;
     if (type === "flight") return `${item.registration || item.country || "Unknown"} | ${item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "altitude unknown"} | ${item.source || "Aircraft feed"}`;
     if (type === "quake") return `M${item.magnitude?.toFixed?.(1) || "?"} | ${item.location || "USGS event"}`;
+    if (type === "fire") return `${item.instrument || "VIIRS"} | FRP ${Math.round(item.frp || 0)} | ${item.confidence || "unknown"} confidence`;
     if (type === "alert") return `${item.event || "Alert"} | ${item.areaSummary || item.region || item.area || "NWS"}`;
     return item.source || "Public signal";
   }
@@ -2398,6 +2426,7 @@
     if (type === "satellite") return "Approximate live position from current public element data.";
     if (type === "flight") return `Public aircraft state from ${item.source || "available public aircraft feed"}.`;
     if (type === "quake") return "USGS seismic event from the all-day GeoJSON feed.";
+    if (type === "fire") return `NASA FIRMS ${item.instrument || "VIIRS"} hotspot. FRP ${Math.round(item.frp || 0)}, confidence ${item.confidence || "unknown"}.`;
     if (type === "alert") return "Official public weather alert from the National Weather Service.";
     return assetSubtitle(type, item);
   }
@@ -2408,6 +2437,7 @@
       satellite: "satellite",
       flight: "plane",
       quake: "activity",
+      fire: "flame",
       alert: "bell-ring",
       traffic: "route",
     }[type] || "circle";
@@ -2419,6 +2449,7 @@
       satellite: COLORS.satellites,
       flight: COLORS.flights,
       quake: COLORS.quakes,
+      fire: COLORS.fires,
       alert: COLORS.alerts,
       traffic: COLORS.traffic,
     }[type] || COLORS.cameras;

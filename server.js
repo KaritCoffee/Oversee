@@ -8,6 +8,7 @@ const REQUESTED_PORT = Number(process.env.PORT || 4173);
 const FALLBACK_PORTS = process.env.PORT ? [REQUESTED_PORT] : [4173, 4183, 4193, 4203, 4303];
 const DATA = loadBrowserExport(path.join(ROOT, "assets", "data.js"), "OVERSEE_DATA");
 const META = loadBrowserExport(path.join(ROOT, "assets", "feed-meta.js"), "OVERSEE_FEED_META");
+const LOCAL_CONFIG = loadLocalConfig();
 const FEEDS_BY_ID = new Map(DATA.feeds.map((feed) => [feed.id, feed]));
 const SOURCES_BY_ID = new Map(DATA.sources.map((source) => [source.id, source]));
 
@@ -30,6 +31,7 @@ const SOURCE_URLS = {
   adsbLolPoint: "https://api.adsb.lol/v2/point",
   usgsQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
   nwsAlerts: "https://api.weather.gov/alerts/active",
+  nasaFirmsArea: "https://firms.modaps.eosdis.nasa.gov/api/area/csv",
   nycTrafficCameras: "https://webcams.nyctmc.org/api/cameras",
   tflJamCams: "https://api.tfl.gov.uk/Place/Type/JamCam",
   nasaGibsWms: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
@@ -129,10 +131,10 @@ const CURATED_PUBLIC_CAMERAS = [
 ];
 
 const SCOPE_BOUNDS = {
-  world: { label: "Global", lamin: -70, lamax: 82, lomin: -180, lomax: 180, limit: 1800, flightLimit: 5000, satelliteLimit: 5000, quakeLimit: 2000 },
-  us: { label: "United States", lamin: 18.0, lamax: 72.5, lomin: -170.0, lomax: -52.0, limit: 1400, flightLimit: 2200, satelliteLimit: 2500, quakeLimit: 1500 },
-  west: { label: "US West", lamin: 31.0, lamax: 49.8, lomin: -125.6, lomax: -102.0, limit: 900, flightLimit: 900, satelliteLimit: 1400, quakeLimit: 900 },
-  oregon: { label: "Oregon", lamin: 41.8, lamax: 46.4, lomin: -124.9, lomax: -116.3, limit: 320, flightLimit: 420, satelliteLimit: 700, quakeLimit: 500 },
+  world: { label: "Global", lamin: -70, lamax: 82, lomin: -180, lomax: 180, limit: 1800, flightLimit: 5000, satelliteLimit: 5000, quakeLimit: 2000, fireLimit: 3000 },
+  us: { label: "United States", lamin: 18.0, lamax: 72.5, lomin: -170.0, lomax: -52.0, limit: 1400, flightLimit: 2200, satelliteLimit: 2500, quakeLimit: 1500, fireLimit: 2200 },
+  west: { label: "US West", lamin: 31.0, lamax: 49.8, lomin: -125.6, lomax: -102.0, limit: 900, flightLimit: 900, satelliteLimit: 1400, quakeLimit: 900, fireLimit: 1200 },
+  oregon: { label: "Oregon", lamin: 41.8, lamax: 46.4, lomin: -124.9, lomax: -116.3, limit: 320, flightLimit: 420, satelliteLimit: 700, quakeLimit: 500, fireLimit: 700 },
 };
 
 const CALTRANS_DISTRICTS = Array.from({ length: 12 }, (_, index) => index + 1);
@@ -452,12 +454,13 @@ listenOnPreferredPort(0);
 
 async function buildIntelSnapshot(scope) {
   const bounds = SCOPE_BOUNDS[scope];
-  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult] = await Promise.all([
+  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, fireResult] = await Promise.all([
     buildCameraSet(scope),
     getCached("satellites", 10 * 60 * 1000, () => fetchSatellites(scope)),
     getCached(`flights:${scope}`, 45 * 1000, () => fetchFlights(scope)),
     getCached("quakes", 60 * 1000, () => fetchQuakes()),
     getCached(`alerts:${scope}`, 90 * 1000, () => fetchAlerts(scope)),
+    getCached(`fires:${scope}`, 5 * 60 * 1000, () => fetchFires(scope)),
   ]);
 
   const cameras = cameraSet.data;
@@ -465,15 +468,17 @@ async function buildIntelSnapshot(scope) {
   const flights = filterGeoItems(flightResult.data, bounds).slice(0, bounds.flightLimit || bounds.limit);
   const quakes = filterGeoItems(quakeResult.data, bounds).slice(0, bounds.quakeLimit || bounds.limit);
   const alerts = filterGeoItems(alertResult.data, bounds).slice(0, 80);
-  const events = buildEvents({ cameras, satellites, flights, quakes, alerts });
-  const regions = buildRegions({ cameras, satellites, flights, quakes, alerts });
-  const severity = buildSeverity({ alerts, quakes });
+  const fires = filterGeoItems(fireResult.data, bounds).slice(0, bounds.fireLimit || 1800);
+  const events = buildEvents({ cameras, satellites, flights, quakes, alerts, fires });
+  const regions = buildRegions({ cameras, satellites, flights, quakes, alerts, fires });
+  const severity = buildSeverity({ alerts, quakes, fires });
   const sourceHealth = [
     ...cameraSet.health,
     healthFromResult("CelesTrak GP", satelliteResult, satellites.length),
     healthFromResult("Aircraft states", flightResult, flights.length),
     healthFromResult("USGS quakes", quakeResult, quakes.length),
     healthFromResult("NWS alerts", alertResult, alerts.length),
+    healthFromResult("NASA FIRMS fires", fireResult, fires.length),
   ];
   const videoFeeds = cameras.filter((camera) => camera.capability === "player" || camera.capability === "stream").length;
 
@@ -486,15 +491,17 @@ async function buildIntelSnapshot(scope) {
     flights,
     quakes,
     alerts,
+    fires,
     traffic: [],
     events,
     regions,
     severity,
     sourceHealth,
     metrics: {
-      eventsToday: cameras.length + satellites.length + flights.length + quakes.length + alerts.length,
+      eventsToday: cameras.length + satellites.length + flights.length + quakes.length + alerts.length + fires.length,
       alerts: alerts.length,
-      assets: cameras.length + satellites.length + flights.length,
+      assets: cameras.length + satellites.length + flights.length + fires.length,
+      fires: fires.length,
       cameraFeeds: cameras.length,
       videoFeeds,
       streams: sourceHealth.filter((source) => source.ok).length,
@@ -2005,6 +2012,71 @@ async function fetchQuakes() {
     .sort((left, right) => (right.magnitude || 0) - (left.magnitude || 0));
 }
 
+async function fetchFires(scope) {
+  const mapKey = nasaFirmsMapKey();
+  if (!mapKey) throw new Error("NASA FIRMS map key is not configured");
+
+  const bounds = SCOPE_BOUNDS[scope] || SCOPE_BOUNDS.world;
+  const area = scope === "world"
+    ? "world"
+    : [bounds.lomin, bounds.lamin, bounds.lomax, bounds.lamax].map((value) => Number(value).toFixed(3)).join(",");
+  const url = `${SOURCE_URLS.nasaFirmsArea}/${encodeURIComponent(mapKey)}/VIIRS_SNPP_NRT/${area}/1`;
+  const csv = await fetchText(url, { timeoutMs: 14000, accept: "text/csv, text/plain;q=0.9, */*;q=0.5" });
+  return parseFirmsCsv(csv)
+    .map((row, index) => mapFirmsRow(row, index))
+    .filter(Boolean)
+    .sort((left, right) => (right.frp || 0) - (left.frp || 0));
+}
+
+function nasaFirmsMapKey() {
+  return process.env.NASA_FIRMS_MAP_KEY || process.env.FIRMS_MAP_KEY || LOCAL_CONFIG.nasaFirmsMapKey || "";
+}
+
+function parseFirmsCsv(csv) {
+  const lines = String(csv || "").trim().split(/\r?\n/).filter(Boolean);
+  const headers = (lines.shift() || "").split(",").map((header) => header.trim());
+  return lines.map((line) => {
+    const values = line.split(",");
+    return Object.fromEntries(headers.map((header, index) => [header, values[index] || ""]));
+  });
+}
+
+function mapFirmsRow(row, index) {
+  const lat = Number(row.latitude);
+  const lng = Number(row.longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const frp = Number(row.frp || 0);
+  const brightness = Number(row.bright_ti4 || row.brightness || 0);
+  const confidence = String(row.confidence || "").toLowerCase();
+  const time = firmsTimestamp(row.acq_date, row.acq_time);
+  const confidenceLabel = { l: "low", n: "nominal", h: "high" }[confidence] || confidence || "unknown";
+  return {
+    id: `fire-${row.acq_date || "date"}-${row.acq_time || "time"}-${lat.toFixed(4)}-${lng.toFixed(4)}-${index}`,
+    type: "fire",
+    name: `Fire hotspot ${confidenceLabel}`,
+    title: `NASA FIRMS hotspot (${confidenceLabel})`,
+    lat,
+    lng,
+    frp,
+    brightness,
+    confidence: confidenceLabel,
+    satellite: row.satellite || "",
+    instrument: row.instrument || "VIIRS",
+    daynight: row.daynight || "",
+    severity: fireSeverity(frp, confidenceLabel),
+    displayColor: fireColor(frp, confidenceLabel),
+    time,
+    source: "NASA FIRMS",
+    url: "https://firms.modaps.eosdis.nasa.gov/map/",
+  };
+}
+
+function firmsTimestamp(date, time) {
+  const cleanDate = /^\d{4}-\d{2}-\d{2}$/.test(String(date || "")) ? date : new Date().toISOString().slice(0, 10);
+  const padded = String(time || "0").padStart(4, "0").slice(0, 4);
+  return new Date(`${cleanDate}T${padded.slice(0, 2)}:${padded.slice(2, 4)}:00Z`).toISOString();
+}
+
 async function fetchAlerts(scope) {
   if (scope === "world" || scope === "us") {
     const data = await fetchJson(SOURCE_URLS.nwsAlerts, { timeoutMs: 12000 });
@@ -2156,7 +2228,7 @@ const STATE_CENTERS = {
   WV: [38.6, -80.6], WY: [43.0, -107.6], DC: [38.9, -77.0],
 };
 
-function buildEvents({ cameras, satellites, flights, quakes, alerts }) {
+function buildEvents({ cameras, satellites, flights, quakes, alerts, fires }) {
   const now = Date.now();
   const cameraEvents = cameras
     .filter((camera) => camera.capability === "player")
@@ -2209,19 +2281,29 @@ function buildEvents({ cameras, satellites, flights, quakes, alerts }) {
     severity: "Orbit",
   }));
 
-  const priority = { alert: 0, quake: 1, flight: 2, satellite: 3, camera: 4 };
-  return [...alertEvents, ...quakeEvents, ...flightEvents, ...satEvents, ...cameraEvents]
+  const fireEvents = fires.slice(0, 5).map((fire) => ({
+    id: fire.id,
+    type: "fire",
+    title: fire.title,
+    region: `${fire.instrument || "VIIRS"} | FRP ${Math.round(fire.frp || 0)}`,
+    time: fire.time,
+    severity: fire.severity,
+  }));
+
+  const priority = { alert: 0, fire: 1, quake: 2, flight: 3, satellite: 4, camera: 5 };
+  return [...alertEvents, ...fireEvents, ...quakeEvents, ...flightEvents, ...satEvents, ...cameraEvents]
     .sort((left, right) => (priority[left.type] ?? 9) - (priority[right.type] ?? 9) || Date.parse(right.time || 0) - Date.parse(left.time || 0))
     .slice(0, 24);
 }
 
-function buildRegions({ cameras, satellites, flights, quakes, alerts }) {
+function buildRegions({ cameras, satellites, flights, quakes, alerts, fires }) {
   const buckets = new Map();
   for (const camera of cameras) addRegion(buckets, camera.region || camera.area, 1);
   for (const satellite of satellites) addRegion(buckets, satellite.objectType || "Orbit", 1);
   for (const flight of flights) addRegion(buckets, flight.country || "Aircraft", 1);
   for (const quake of quakes) addRegion(buckets, "Seismic", Math.max(1, Math.round(quake.magnitude || 1)));
   for (const alert of alerts) addRegion(buckets, alert.area || "Alerts", 2);
+  for (const fire of fires) addRegion(buckets, "Fire Hotspots", Math.max(1, Math.ceil((fire.frp || 1) / 25)));
 
   return Array.from(buckets, ([name, total], index) => ({
     name,
@@ -2238,7 +2320,7 @@ function addRegion(buckets, name, amount) {
   buckets.set(key, (buckets.get(key) || 0) + amount);
 }
 
-function buildSeverity({ alerts, quakes }) {
+function buildSeverity({ alerts, quakes, fires = [] }) {
   const severity = { critical: 0, high: 0, medium: 0, low: 0 };
   for (const quake of quakes) {
     if ((quake.magnitude || 0) >= 5) severity.critical += 1;
@@ -2251,6 +2333,12 @@ function buildSeverity({ alerts, quakes }) {
     if (label.includes("extreme") || label.includes("severe")) severity.critical += 1;
     else if (label.includes("moderate")) severity.high += 1;
     else if (label.includes("minor")) severity.medium += 1;
+    else severity.low += 1;
+  }
+  for (const fire of fires) {
+    if (fire.severity === "critical") severity.critical += 1;
+    else if (fire.severity === "high") severity.high += 1;
+    else if (fire.severity === "medium") severity.medium += 1;
     else severity.low += 1;
   }
   return severity;
@@ -2274,6 +2362,20 @@ function quakeColor(magnitude) {
   if (magnitude >= 4) return "#ff7a1a";
   if (magnitude >= 2.5) return "#ffb02e";
   return "#19e2ff";
+}
+
+function fireSeverity(frp, confidence) {
+  if (confidence === "high" || frp >= 100) return "critical";
+  if (frp >= 40) return "high";
+  if (frp >= 10 || confidence === "nominal") return "medium";
+  return "low";
+}
+
+function fireColor(frp, confidence) {
+  if (confidence === "high" || frp >= 100) return "#ff4e57";
+  if (frp >= 40) return "#ff7a1a";
+  if (frp >= 10 || confidence === "nominal") return "#ffb02e";
+  return "#18f0a0";
 }
 
 function inBounds(item, bounds) {
@@ -2335,6 +2437,22 @@ async function fetchJson(url, options = {}) {
 
   if (!response.ok) throw new Error(`${new URL(url).hostname} returned ${response.status}`);
   return response.json();
+}
+
+async function fetchText(url, options = {}) {
+  const response = await fetch(url, {
+    method: options.method || "GET",
+    headers: {
+      "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+      Accept: options.accept || "text/plain, */*;q=0.8",
+      ...(options.headers || {}),
+    },
+    body: options.body,
+    signal: AbortSignal.timeout(options.timeoutMs || 9000),
+  });
+
+  if (!response.ok) throw new Error(`${new URL(url).hostname} returned ${response.status}`);
+  return response.text();
 }
 
 async function proxyGibsTexture(requestUrl, response) {
@@ -2533,6 +2651,23 @@ function loadBrowserExport(filePath, exportName) {
   vm.createContext(context);
   vm.runInContext(`${source}; this.__export__ = ${exportName};`, context, { filename: filePath });
   return context.__export__;
+}
+
+function loadLocalConfig() {
+  const candidates = [
+    path.join(ROOT, "config.local.json"),
+    path.join(ROOT, "resources", "config.local.json"),
+  ];
+
+  for (const filePath of candidates) {
+    try {
+      if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch (error) {
+      console.warn(`Unable to read ${path.basename(filePath)}: ${error.message}`);
+    }
+  }
+
+  return {};
 }
 
 function listenOnPreferredPort(index) {
