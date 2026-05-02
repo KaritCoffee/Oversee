@@ -6,6 +6,11 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
+$cargoBin = Join-Path $env:USERPROFILE ".cargo\bin"
+if (Test-Path $cargoBin) {
+  $env:Path = "$cargoBin;$env:Path"
+}
+
 function Require-Command {
   param(
     [Parameter(Mandatory = $true)]
