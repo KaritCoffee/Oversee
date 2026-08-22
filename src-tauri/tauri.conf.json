@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Oversee",
-  "version": "0.1.6",
+  "version": "2.1.0",
   "identifier": "com.karitcoffee.oversee",
   "build": {
     "beforeDevCommand": "node server.js",
@@ -17,6 +17,14 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "windows": {
+      "nsis": {
+        "languages": ["English"],
+        "customLanguageFiles": {
+          "English": "nsis/English.nsh"
+        }
+      }
+    },
     "resources": [
       "../server.js",
       "../index.html",

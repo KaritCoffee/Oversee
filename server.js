@@ -4,11 +4,16 @@ const http = require("node:http");
 const vm = require("node:vm");
 
 const ROOT = __dirname;
+const APP_VERSION = "2.1.0";
 const REQUESTED_PORT = Number(process.env.PORT || 4173);
 const FALLBACK_PORTS = process.env.PORT ? [REQUESTED_PORT] : [4173, 4183, 4193, 4203, 4303];
 const DATA = loadBrowserExport(path.join(ROOT, "assets", "data.js"), "OVERSEE_DATA");
 const META = loadBrowserExport(path.join(ROOT, "assets", "feed-meta.js"), "OVERSEE_FEED_META");
-const LOCAL_CONFIG = loadLocalConfig();
+const USER_CONFIG_PATH = process.env.OVERSEE_USER_CONFIG_PATH || path.join(process.env.LOCALAPPDATA || ROOT, "Oversee", "config.local.json");
+const RUNTIME_CACHE_DIR = process.env.OVERSEE_CACHE_DIR || path.join(process.env.LOCALAPPDATA || ROOT, "Oversee", "cache");
+const BUNDLED_CONFIG = loadBundledConfig();
+const USER_CONFIG = loadUserConfig();
+const LOCAL_CONFIG = { ...BUNDLED_CONFIG, ...USER_CONFIG };
 const FEEDS_BY_ID = new Map(DATA.feeds.map((feed) => [feed.id, feed]));
 const SOURCES_BY_ID = new Map(DATA.sources.map((source) => [source.id, source]));
 
@@ -32,9 +37,12 @@ const SOURCE_URLS = {
   usgsQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
   usgsSignificantQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_month.geojson",
   nwsAlerts: "https://api.weather.gov/alerts/active",
+  nhcCurrentStorms: "https://www.nhc.noaa.gov/CurrentStorms.json",
+  gdeltCubaDocs: "https://api.gdeltproject.org/api/v2/doc/doc",
   nasaFirmsArea: "https://firms.modaps.eosdis.nasa.gov/api/area/csv",
   egpIncidents: "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/EGP_Active_Incidents_Prod_Public_View/FeatureServer/0/query",
   egpPerimeters: "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query",
+  censusAcsStatePopulation: "https://api.census.gov/data/2023/acs/acs5",
   nycTrafficCameras: "https://webcams.nyctmc.org/api/cameras",
   tflJamCams: "https://api.tfl.gov.uk/Place/Type/JamCam",
   nasaGibsWms: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
@@ -45,10 +53,20 @@ const SOURCE_URLS = {
   northDakotaCameras: "https://travelfiles.dot.nd.gov/geojson_nc/cameras.json",
   ontario511Cameras: "https://511on.ca/api/v2/get/cameras?format=json",
   alberta511Cameras: "https://511.alberta.ca/api/v2/get/cameras?format=json",
+  hongKongTrafficCameras: "https://opendata.esrichina.hk/datasets/bdfd0ca3f731412d81391d00b721bd08_0.geojson?where=1%3D1",
+  madridTrafficKml: "http://datos.madrid.es/egob/catalogo/202088-0-trafico-camaras.kml",
+  spainDgtCameras: "https://nap.dgt.es/datex2/v3/dgt/DevicePublication/camaras_datex2_v36.xml",
   fintrafficWeathercams: "https://tie.digitraffic.fi/api/weathercam/v1/stations",
   fintrafficWeathercamData: "https://tie.digitraffic.fi/api/weathercam/v1/stations/data",
   missouriSnapshots: "https://traveler.modot.org/map/js/snapshot.json",
   arizonaListCameras: "https://az511.com/List/GetData/Cameras",
+  austinTrafficCameras: "https://data.austintexas.gov/resource/b4k4-adkb.json",
+  singaporeTrafficImages: "https://api.data.gov.sg/v1/transport/traffic-images",
+  nztaTrafficCameras: "https://trafficnz.info/service/traffic/rest/4/cameras/all",
+  nswTrafficCameras: "https://api.transport.nsw.gov.au/v1/live/cameras",
+  wisconsin511Cameras: "https://511wi.gov/api/v2/get/cameras",
+  louisiana511Cameras: "https://511la.org/api/v2/get/cameras",
+  driveNcCameras: "https://nc.prod.traveliq.co/api/v2/get/cameras",
 };
 
 const GIBS_TEXTURES = {
@@ -131,6 +149,171 @@ const CURATED_PUBLIC_CAMERAS = [
     lat: 52.5186,
     lng: 13.4083,
   },
+  {
+    id: "cu-havana-worldcamera",
+    name: "Havana Public Webcam Listing",
+    area: "Havana",
+    region: "La Habana",
+    county: "Havana",
+    country: "Cuba",
+    category: "city",
+    sourceName: "WorldCamera Cuba",
+    officialUrl: "https://worldcamera.net/en/webcams/caribic/cuba",
+    sourcePageUrl: "https://worldcamera.net/en/webcams/caribic/cuba",
+    lat: 23.1136,
+    lng: -82.3666,
+    sourceOnly: true,
+  },
+  {
+    id: "cu-varadero-worldcamera",
+    name: "Varadero Public Webcam Listing",
+    area: "Varadero",
+    region: "Matanzas",
+    county: "Matanzas",
+    country: "Cuba",
+    category: "beach",
+    sourceName: "WorldCamera Cuba",
+    officialUrl: "https://worldcamera.net/en/webcams/caribic/cuba",
+    sourcePageUrl: "https://worldcamera.net/en/webcams/caribic/cuba",
+    lat: 23.1799,
+    lng: -81.1885,
+    sourceOnly: true,
+  },
+  {
+    id: "cu-havana-cruising-earth",
+    name: "Havana Port Camera Listing",
+    area: "Havana",
+    region: "La Habana",
+    county: "Havana",
+    country: "Cuba",
+    category: "harbor",
+    sourceName: "Cruising Earth Port Cameras",
+    officialUrl: "https://www.cruisingearth.com/port-webcams/caribbean/havana-cuba/",
+    sourcePageUrl: "https://www.cruisingearth.com/port-webcams/caribbean/havana-cuba/",
+    lat: 23.1377,
+    lng: -82.3476,
+    sourceOnly: true,
+  },
+  {
+    id: "pa-panama-canal-miraflores",
+    name: "Panama Canal Miraflores Locks",
+    area: "Miraflores Locks",
+    region: "Panama Canal",
+    county: "Panama",
+    country: "Panama",
+    category: "harbor",
+    sourceName: "Panama Canal Authority Webcams",
+    officialUrl: "https://multimedia.panama-canal.com/Webcams/miraflores.html",
+    sourcePageUrl: "https://multimedia.panama-canal.com/Webcams/miraflores.html",
+    imageUrl: "http://webcams.delcanal.com/hd-miraflores.jpg",
+    lat: 8.9967,
+    lng: -79.5908,
+  },
+  {
+    id: "pa-panama-canal-gatun",
+    name: "Panama Canal Gatun Locks",
+    area: "Gatun Locks",
+    region: "Panama Canal",
+    county: "Colon",
+    country: "Panama",
+    category: "harbor",
+    sourceName: "Panama Canal Authority Webcams",
+    officialUrl: "https://multimedia.panama-canal.com/Webcams/gatun.html",
+    sourcePageUrl: "https://multimedia.panama-canal.com/Webcams/gatun.html",
+    imageUrl: "http://webcams.delcanal.com/gatun00009.jpg",
+    lat: 9.2728,
+    lng: -79.9203,
+  },
+  {
+    id: "pa-panama-canal-agua-clara",
+    name: "Panama Canal Agua Clara Locks",
+    area: "Agua Clara Locks",
+    region: "Panama Canal",
+    county: "Colon",
+    country: "Panama",
+    category: "harbor",
+    sourceName: "Panama Canal Authority Webcams",
+    officialUrl: "https://multimedia.panama-canal.com/Webcams/aguaclara.html",
+    sourcePageUrl: "https://multimedia.panama-canal.com/Webcams/aguaclara.html",
+    imageUrl: "http://webcams.delcanal.com/aguaclara00001.jpg",
+    lat: 9.3027,
+    lng: -79.9127,
+  },
+  {
+    id: "pa-panama-canal-cocoli",
+    name: "Panama Canal Cocoli Locks",
+    area: "Cocoli Locks",
+    region: "Panama Canal",
+    county: "Panama",
+    country: "Panama",
+    category: "harbor",
+    sourceName: "Panama Canal Authority Webcams",
+    officialUrl: "https://multimedia.panama-canal.com/Webcams/cocoli.html",
+    sourcePageUrl: "https://multimedia.panama-canal.com/Webcams/cocoli.html",
+    imageUrl: "http://webcams.delcanal.com/cocoli00001.jpg",
+    lat: 8.9759,
+    lng: -79.5904,
+  },
+  {
+    id: "us-al-algo-cameras",
+    name: "ALGO Traffic Camera Portal",
+    area: "Alabama",
+    region: "Alabama",
+    county: "Statewide",
+    country: "United States",
+    category: "traffic",
+    sourceName: "ALGO Traffic Cameras",
+    officialUrl: "https://algotraffic.com/Cameras",
+    sourcePageUrl: "https://algotraffic.com/Cameras",
+    lat: 32.8067,
+    lng: -86.7911,
+    sourceOnly: true,
+  },
+  {
+    id: "us-ar-idrive-cameras",
+    name: "IDrive Arkansas Camera Portal",
+    area: "Arkansas",
+    region: "Arkansas",
+    county: "Statewide",
+    country: "United States",
+    category: "traffic",
+    sourceName: "IDrive Arkansas",
+    officialUrl: "https://idrivearkansas.com/",
+    sourcePageUrl: "https://idrivearkansas.com/",
+    lat: 34.9697,
+    lng: -92.3731,
+    sourceOnly: true,
+  },
+  {
+    id: "us-tn-smartway-cameras",
+    name: "TDOT SmartWay Camera Portal",
+    area: "Tennessee",
+    region: "Tennessee",
+    county: "Statewide",
+    country: "United States",
+    category: "traffic",
+    sourceName: "TDOT SmartWay Cameras",
+    officialUrl: "https://smartway.tn.gov/allcams",
+    sourcePageUrl: "https://smartway.tn.gov/allcams",
+    lat: 35.7478,
+    lng: -86.6923,
+    sourceOnly: true,
+  },
+  {
+    id: "us-ok-oktraffic-cameras",
+    name: "OKTraffic Camera Portal",
+    area: "Oklahoma",
+    region: "Oklahoma",
+    county: "Statewide",
+    country: "United States",
+    category: "traffic",
+    sourceName: "OKTraffic / ODOT Hub",
+    officialUrl: "https://spotlight-okdot.hub.arcgis.com/",
+    sourcePageUrl: "https://spotlight-okdot.hub.arcgis.com/",
+    lat: 35.5653,
+    lng: -96.9289,
+    sourceOnly: true,
+  },
 ];
 
 const SCOPE_BOUNDS = {
@@ -140,11 +323,81 @@ const SCOPE_BOUNDS = {
   oregon: { label: "Oregon", lamin: 41.8, lamax: 46.4, lomin: -124.9, lomax: -116.3, limit: 320, flightLimit: 420, satelliteLimit: 700, quakeLimit: 500, fireLimit: 700 },
 };
 
+const CENSUS_STATE_CENTROIDS = {
+  "01": { code: "AL", lat: 32.8067, lng: -86.7911 },
+  "02": { code: "AK", lat: 61.3707, lng: -152.4044 },
+  "04": { code: "AZ", lat: 33.7298, lng: -111.4312 },
+  "05": { code: "AR", lat: 34.9697, lng: -92.3731 },
+  "06": { code: "CA", lat: 36.1162, lng: -119.6816 },
+  "08": { code: "CO", lat: 39.0598, lng: -105.3111 },
+  "09": { code: "CT", lat: 41.5978, lng: -72.7554 },
+  "10": { code: "DE", lat: 39.3185, lng: -75.5071 },
+  "11": { code: "DC", lat: 38.8974, lng: -77.0268 },
+  "12": { code: "FL", lat: 27.7663, lng: -81.6868 },
+  "13": { code: "GA", lat: 33.0406, lng: -83.6431 },
+  "15": { code: "HI", lat: 21.0943, lng: -157.4983 },
+  "16": { code: "ID", lat: 44.2405, lng: -114.4788 },
+  "17": { code: "IL", lat: 40.3495, lng: -88.9861 },
+  "18": { code: "IN", lat: 39.8494, lng: -86.2583 },
+  "19": { code: "IA", lat: 42.0115, lng: -93.2105 },
+  "20": { code: "KS", lat: 38.5266, lng: -96.7265 },
+  "21": { code: "KY", lat: 37.6681, lng: -84.6701 },
+  "22": { code: "LA", lat: 31.1695, lng: -91.8678 },
+  "23": { code: "ME", lat: 44.6939, lng: -69.3819 },
+  "24": { code: "MD", lat: 39.0639, lng: -76.8021 },
+  "25": { code: "MA", lat: 42.2302, lng: -71.5301 },
+  "26": { code: "MI", lat: 43.3266, lng: -84.5361 },
+  "27": { code: "MN", lat: 45.6945, lng: -93.9002 },
+  "28": { code: "MS", lat: 32.7416, lng: -89.6787 },
+  "29": { code: "MO", lat: 38.4561, lng: -92.2884 },
+  "30": { code: "MT", lat: 46.9219, lng: -110.4544 },
+  "31": { code: "NE", lat: 41.1254, lng: -98.2681 },
+  "32": { code: "NV", lat: 38.3135, lng: -117.0554 },
+  "33": { code: "NH", lat: 43.4525, lng: -71.5639 },
+  "34": { code: "NJ", lat: 40.2989, lng: -74.521 },
+  "35": { code: "NM", lat: 34.8405, lng: -106.2485 },
+  "36": { code: "NY", lat: 42.1657, lng: -74.9481 },
+  "37": { code: "NC", lat: 35.6301, lng: -79.8064 },
+  "38": { code: "ND", lat: 47.5289, lng: -99.784 },
+  "39": { code: "OH", lat: 40.3888, lng: -82.7649 },
+  "40": { code: "OK", lat: 35.5653, lng: -96.9289 },
+  "41": { code: "OR", lat: 44.572, lng: -122.0709 },
+  "42": { code: "PA", lat: 40.5908, lng: -77.2098 },
+  "44": { code: "RI", lat: 41.6809, lng: -71.5118 },
+  "45": { code: "SC", lat: 33.8569, lng: -80.945 },
+  "46": { code: "SD", lat: 44.2998, lng: -99.4388 },
+  "47": { code: "TN", lat: 35.7478, lng: -86.6923 },
+  "48": { code: "TX", lat: 31.0545, lng: -97.5635 },
+  "49": { code: "UT", lat: 40.1500, lng: -111.8624 },
+  "50": { code: "VT", lat: 44.0459, lng: -72.7107 },
+  "51": { code: "VA", lat: 37.7693, lng: -78.17 },
+  "53": { code: "WA", lat: 47.4009, lng: -121.4905 },
+  "54": { code: "WV", lat: 38.4912, lng: -80.9545 },
+  "55": { code: "WI", lat: 44.2685, lng: -89.6165 },
+  "56": { code: "WY", lat: 42.756, lng: -107.3025 },
+  "72": { code: "PR", lat: 18.2208, lng: -66.5901 },
+};
+
 const CALTRANS_DISTRICTS = Array.from({ length: 12 }, (_, index) => index + 1);
 const DYNAMIC_CAMERAS_BY_ID = new Map();
 const CELESTRAK_FALLBACK_GROUPS = ["visual", "stations", "starlink", "gps-ops", "gnss", "geo", "weather", "resource"];
 
 const ARCGIS_CAMERA_SOURCES = [
+  {
+    id: "penndot",
+    name: "PennDOT Traffic Cameras",
+    url: "https://gis.penndot.gov/arcgis/rest/services/paprojects/paprojects/MapServer/14/query",
+    country: "United States",
+    region: "Pennsylvania",
+    category: "traffic",
+    nameFields: ["LOCATION_DESC", "STATEWIDE_ID"],
+    areaFields: ["LOCATION_DESC"],
+    imageFields: ["URL"],
+    sourceOnly: true,
+    refreshSeconds: 60,
+    officialUrl: "https://www.511pa.com/",
+    tags: ["pennsylvania", "penndot", "511pa", "traffic", "dot"],
+  },
   {
     id: "drivebc",
     name: "DriveBC Highway Cameras",
@@ -193,7 +446,7 @@ const ARCGIS_CAMERA_SOURCES = [
   },
   {
     id: "illinois-travel-midwest",
-    name: "Illinois Travel Midwest Cameras",
+    name: "Illinois Gateway / Travel Midwest Cameras",
     url: "https://services2.arcgis.com/aIrBD8yn1TDTEXoz/arcgis/rest/services/TrafficCamerasTM_Public/FeatureServer/0/query",
     country: "United States",
     region: "Illinois",
@@ -418,13 +671,28 @@ const server = http.createServer(async (request, response) => {
     const requestUrl = new URL(request.url, `http://${request.headers.host}`);
 
     if (requestUrl.pathname === "/api/health") {
-      return sendJson(response, 200, { ok: true, port: serverPort, generatedAt: new Date().toISOString() });
+      return sendJson(response, 200, { ok: true, version: APP_VERSION, port: serverPort, generatedAt: new Date().toISOString() });
     }
 
     if (requestUrl.pathname === "/api/cameras") {
       const scope = normalizeScope(requestUrl.searchParams.get("scope"));
       const cameraSet = await buildCameraSet(scope);
       return sendJson(response, 200, { generatedAt: new Date().toISOString(), scope, cameras: cameraSet.data, sourceHealth: cameraSet.health });
+    }
+
+    if (requestUrl.pathname === "/api/settings") {
+      if (request.method === "GET") return sendJson(response, 200, publicSettings());
+      if (request.method === "POST") {
+        if (!isSameOriginLocalRequest(request)) {
+          return sendJson(response, 403, { error: "Forbidden origin" });
+        }
+        if (!String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) {
+          return sendJson(response, 415, { error: "Content-Type must be application/json" });
+        }
+        const payload = await readJsonBody(request);
+        return sendJson(response, 200, updateLocalSettings(payload));
+      }
+      return sendJson(response, 405, { error: "Method not allowed" });
     }
 
     if (requestUrl.pathname === "/api/intel-snapshot") {
@@ -437,6 +705,11 @@ const server = http.createServer(async (request, response) => {
       const feedId = requestUrl.searchParams.get("id");
       if (!feedId) return sendJson(response, 400, { error: "Missing feed id" });
       return sendJson(response, 200, await resolveFeedView(feedId));
+    }
+
+    if (requestUrl.pathname === "/api/demo-feeds") {
+      const scope = normalizeScope(requestUrl.searchParams.get("scope"));
+      return sendJson(response, 200, await buildDemoFeeds(scope));
     }
 
     if (requestUrl.pathname === "/api/globe-texture") {
@@ -457,23 +730,32 @@ listenOnPreferredPort(0);
 
 async function buildIntelSnapshot(scope) {
   const bounds = SCOPE_BOUNDS[scope];
-  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, fireResult, egpIncidentResult, egpPerimeterResult] = await Promise.all([
+  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, nhcResult, cubaReportResult, fireResult, egpIncidentResult, egpPerimeterResult, censusResult] = await Promise.all([
     buildCameraSet(scope),
     getCached("satellites", 10 * 60 * 1000, () => fetchSatellites(scope)),
-    getCached(`flights:${scope}`, 45 * 1000, () => fetchFlights(scope)),
+    getCached(`flights:${scope}`, 10 * 60 * 1000, () => fetchFlights(scope)),
     getCached("quakes", 60 * 1000, () => fetchQuakes()),
     getCached(`alerts:${scope}`, 90 * 1000, () => fetchAlerts(scope)),
+    getCached("nhc:current-storms", 10 * 60 * 1000, () => fetchNhcStormAlerts()),
+    getCached("gdelt:cuba-reports", 15 * 60 * 1000, () => fetchCubaOpenReports()),
     getCached(`fires:${scope}`, 5 * 60 * 1000, () => fetchFires(scope)),
     getCached("egp:incidents", 5 * 60 * 1000, () => fetchEgpIncidents()),
     getCached("egp:perimeters", 10 * 60 * 1000, () => fetchEgpPerimeters()),
+    getCached("census:state-population", 24 * 60 * 60 * 1000, () => fetchCensusDemographics()),
   ]);
 
   const cameras = cameraSet.data;
   const satellites = filterGeoItems(satelliteResult.data, bounds).slice(0, bounds.satelliteLimit || bounds.limit);
   const flights = filterGeoItems(flightResult.data, bounds).slice(0, bounds.flightLimit || bounds.limit);
   const quakes = filterGeoItems(quakeResult.data, bounds).slice(0, bounds.quakeLimit || bounds.limit);
-  const alerts = filterGeoItems(alertResult.data, bounds).slice(0, 80);
+  const cubaReferenceSignals = buildCubaReferenceSignals();
+  const nwsAlerts = filterGeoItems(alertResult.data || [], bounds);
+  const nhcAlerts = filterGeoItems(nhcResult.data || [], bounds);
+  const cubaReportAlerts = filterGeoItems(cubaReportResult.data || [], bounds);
+  const referenceAlerts = filterGeoItems(cubaReferenceSignals, bounds);
+  const alerts = sortAlertsForDisplay([...nwsAlerts, ...nhcAlerts, ...cubaReportAlerts, ...referenceAlerts]).slice(0, 100);
   const fires = filterGeoItems([...(fireResult.data || []), ...(egpIncidentResult.data || []), ...(egpPerimeterResult.data || [])], bounds).slice(0, bounds.fireLimit || 1800);
+  const demographics = filterGeoItems(censusResult.data || [], bounds).slice(0, 80);
   const events = buildEvents({ cameras, satellites, flights, quakes, alerts, fires });
   const regions = buildRegions({ cameras, satellites, flights, quakes, alerts, fires });
   const severity = buildSeverity({ alerts, quakes, fires });
@@ -482,10 +764,14 @@ async function buildIntelSnapshot(scope) {
     healthFromResult("CelesTrak GP", satelliteResult, satellites.length),
     healthFromResult("Aircraft states", flightResult, flights.length),
     healthFromResult("USGS quakes", quakeResult, quakes.length),
-    healthFromResult("NWS alerts", alertResult, alerts.length),
+    healthFromResult("NWS alerts", alertResult, nwsAlerts.length),
+    healthFromResult("NHC active storms", nhcResult, nhcAlerts.length),
+    healthFromResult("Cuba open reporting", cubaReportResult, cubaReportAlerts.length, { optional: true }),
+    { name: "Cuba reference monitors", ok: true, count: referenceAlerts.length, cached: false, stale: false, message: "" },
     healthFromResult("NASA FIRMS fires", fireResult, filterGeoItems(fireResult.data || [], bounds).length),
     healthFromResult("EGP WildFireSA incidents", egpIncidentResult, filterGeoItems(egpIncidentResult.data || [], bounds).length),
     healthFromResult("WFIGS current perimeters", egpPerimeterResult, filterGeoItems(egpPerimeterResult.data || [], bounds).length),
+    healthFromResult("Census ACS population", censusResult, demographics.length),
   ];
   const videoFeeds = cameras.filter((camera) => camera.capability === "player" || camera.capability === "stream").length;
 
@@ -499,16 +785,18 @@ async function buildIntelSnapshot(scope) {
     quakes,
     alerts,
     fires,
+    demographics,
     traffic: [],
     events,
     regions,
     severity,
     sourceHealth,
     metrics: {
-      eventsToday: cameras.length + satellites.length + flights.length + quakes.length + alerts.length + fires.length,
+      eventsToday: cameras.length + satellites.length + flights.length + quakes.length + alerts.length + fires.length + demographics.length,
       alerts: alerts.length,
       assets: cameras.length + satellites.length + flights.length + fires.length,
       fires: fires.length,
+      demographics: demographics.length,
       cameraFeeds: cameras.length,
       videoFeeds,
       streams: sourceHealth.filter((source) => source.ok).length,
@@ -576,9 +864,236 @@ async function buildLocalCameras() {
     .filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng));
 }
 
+async function buildDemoFeeds(scope = "world") {
+  const bounds = SCOPE_BOUNDS[scope] || SCOPE_BOUNDS.world;
+  const [localCameras, cameraSet] = await Promise.all([
+    buildLocalCameras(),
+    buildCameraSet(scope),
+  ]);
+  const localById = new Map(localCameras.map((camera) => [camera.id, camera]));
+  const knownFeeds = (await Promise.all(Object.keys(KNOWN_LIVE_PLAYER_VIEWS)
+    .map(async (feedId) => {
+      const camera = localById.get(feedId);
+      const feed = FEEDS_BY_ID.get(feedId);
+      if (!camera || !feed) return null;
+      if (bounds && bounds !== SCOPE_BOUNDS.world && !inBounds(camera, bounds)) return null;
+      const view = await resolveKnownPlayerView(feed, META[feedId] || {});
+      if (!isDemoPlayableView(view)) return null;
+      return makeDemoFeedEntry(camera, {
+        feedId,
+        generatedAt: new Date().toISOString(),
+        officialUrl: feed.url,
+        note: "Pre-vetted public embedded player used for demo mode.",
+        ...view,
+        capability: "player",
+      }, "curated-player");
+    }))).filter(Boolean);
+
+  const knownIds = new Set(knownFeeds.map((entry) => entry.camera.id));
+  const candidates = selectDiverseDemoCandidates(
+    cameraSet.data.filter((camera) => !knownIds.has(camera.id)),
+    84
+  );
+  const dynamicFeeds = (await mapLimit(candidates, 8, async (camera) => {
+    try {
+      const view = await resolveFeedView(camera.id);
+      if (!isDemoPlayableView(view)) return null;
+      return makeDemoFeedEntry(camera, {
+        ...view,
+        generatedAt: new Date().toISOString(),
+        note: view.note || "Validated browser-playable public video selected for demo mode.",
+      }, "validated-catalog");
+    } catch {
+      return null;
+    }
+  })).filter(Boolean);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    scope,
+    feeds: distributeDemoFeeds([...knownFeeds, ...dynamicFeeds], 32),
+  };
+}
+
+function makeDemoFeedEntry(camera, view, demoSource) {
+  return {
+    bucket: demoGeoBucket(camera),
+    demoSource,
+    camera: {
+      ...camera,
+      capability: "player",
+      capabilityLabel: view.type === "hls" ? "Live Stream" : view.type === "video" ? "Public Video" : "Live Player",
+    },
+    view: {
+      ...view,
+      capability: view.type === "iframe" ? "player" : view.capability || "player",
+    },
+  };
+}
+
+function isDemoPlayableView(view) {
+  if (!view || view.streamStatus === "down" || view.offlineReason) return false;
+  if (view.type === "video" || view.type === "hls") return Boolean(view.url);
+  if (view.type !== "iframe") return false;
+  if (view.capability !== "player") return false;
+  return Boolean(view.url);
+}
+
+function selectDiverseDemoCandidates(cameras, limit = 84) {
+  const byBucket = new Map();
+  const sourceCounts = new Map();
+  const eligible = uniqueCamerasById(cameras)
+    .filter(isDemoStreamCandidate)
+    .sort(compareDemoCandidates);
+
+  for (const camera of eligible) {
+    const bucket = demoGeoBucket(camera);
+    const sourceKey = `${bucket}:${camera.sourceName || camera.sourceId || "unknown"}`;
+    const bucketItems = byBucket.get(bucket) || [];
+    if (bucketItems.length >= 14) continue;
+    if ((sourceCounts.get(sourceKey) || 0) >= 5) continue;
+    bucketItems.push(camera);
+    byBucket.set(bucket, bucketItems);
+    sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) || 0) + 1);
+  }
+
+  return roundRobinBuckets(byBucket, [
+    "US West",
+    "US Mountain",
+    "US Central",
+    "US East",
+    "Canada",
+    "United Kingdom",
+    "Europe",
+    "Asia Pacific",
+    "Latin America",
+    "Global",
+  ], limit);
+}
+
+function isDemoStreamCandidate(camera) {
+  if (!camera || !Number.isFinite(Number(camera.lat)) || !Number.isFinite(Number(camera.lng))) return false;
+  if (!camera.streamUrl) return camera.capability === "player" && camera.viewerType === "iframe";
+  if (camera.viewerType === "hls" || camera.viewerType === "video") return true;
+  return /\.(?:m3u8|mp4|m4v|webm)(?:$|\?)/i.test(camera.streamUrl);
+}
+
+function compareDemoCandidates(left, right) {
+  const rank = (camera) => {
+    if (camera.viewerType === "hls" && camera.capability === "stream") return 0;
+    if (camera.viewerType === "hls") return 1;
+    if (camera.viewerType === "video") return 2;
+    if (camera.capability === "player") return 3;
+    return 4;
+  };
+  return rank(left) - rank(right) ||
+    String(left.country || "").localeCompare(String(right.country || "")) ||
+    String(left.region || "").localeCompare(String(right.region || "")) ||
+    String(left.name || "").localeCompare(String(right.name || ""));
+}
+
+function distributeDemoFeeds(feeds, limit = 32) {
+  const unique = uniqueDemoEntries(feeds);
+  const byBucket = new Map();
+  for (const entry of unique) {
+    const bucket = entry.bucket || demoGeoBucket(entry.camera);
+    const items = byBucket.get(bucket) || [];
+    items.push(entry);
+    byBucket.set(bucket, items);
+  }
+  return roundRobinBuckets(byBucket, [
+    "US West",
+    "US Mountain",
+    "US Central",
+    "US East",
+    "Canada",
+    "United Kingdom",
+    "Europe",
+    "Asia Pacific",
+    "Latin America",
+    "Global",
+  ], limit);
+}
+
+function roundRobinBuckets(byBucket, preferredOrder, limit) {
+  const buckets = [
+    ...preferredOrder.filter((bucket) => byBucket.has(bucket)),
+    ...[...byBucket.keys()].filter((bucket) => !preferredOrder.includes(bucket)).sort(),
+  ];
+  const output = [];
+  for (let index = 0; output.length < limit; index += 1) {
+    let added = false;
+    for (const bucket of buckets) {
+      const item = byBucket.get(bucket)?.[index];
+      if (item) {
+        output.push(item);
+        added = true;
+        if (output.length >= limit) break;
+      }
+    }
+    if (!added) break;
+  }
+  return output;
+}
+
+function demoGeoBucket(camera) {
+  const country = cleanCameraText(camera?.country || "");
+  const region = cleanCameraText(camera?.region || "");
+  const lat = Number(camera?.lat);
+  const lng = Number(camera?.lng);
+  const insideContinentalUs = Number.isFinite(lat) && Number.isFinite(lng) && lat >= 24 && lat <= 50 && lng >= -125 && lng <= -66;
+  const looksUnitedStates = /^united states$/i.test(country) || insideContinentalUs || /oregon|washington|california|idaho|nevada|arizona|colorado|minnesota|iowa|kansas|nebraska|north dakota|missouri|maryland|new york|alabama|arkansas/i.test(region);
+  if (looksUnitedStates) {
+    if (/california|oregon|washington|alaska|hawaii|nevada|arizona/i.test(region) || lng <= -112) return "US West";
+    if (/colorado|idaho|montana|utah|wyoming|new mexico/i.test(region) || lng <= -102) return "US Mountain";
+    if (/minnesota|iowa|kansas|nebraska|north dakota|south dakota|missouri|texas|oklahoma/i.test(region) || lng <= -88) return "US Central";
+    return "US East";
+  }
+  if (/canada/i.test(country)) return "Canada";
+  if (/united kingdom|england|scotland|wales|northern ireland/i.test(country)) return "United Kingdom";
+  if (/spain|finland|germany|france|netherlands|belgium|italy|portugal|ireland|switzerland|austria|norway|sweden|denmark/i.test(country)) return "Europe";
+  if (/hong kong|china|japan|south korea|singapore|australia|new zealand|taiwan|india|thailand|philippines|indonesia|malaysia/i.test(country)) return "Asia Pacific";
+  if (/panama|cuba|mexico|brazil|argentina|chile|colombia|peru|caribbean/i.test(country)) return "Latin America";
+  return country || "Global";
+}
+
+function uniqueCamerasById(cameras) {
+  const seen = new Set();
+  return (cameras || []).filter((camera) => {
+    if (!camera?.id || seen.has(camera.id)) return false;
+    seen.add(camera.id);
+    return true;
+  });
+}
+
+function uniqueDemoEntries(entries) {
+  const seen = new Set();
+  return (entries || []).filter((entry) => {
+    const id = entry?.camera?.id || entry?.view?.feedId;
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+async function mapLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let index = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (index < items.length) {
+      const current = index;
+      index += 1;
+      results[current] = await mapper(items[current], current);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 function mapCuratedCamera(camera) {
   return {
     id: camera.id,
+    dynamic: true,
     type: "camera",
     name: camera.name,
     shortName: shortCameraName(camera.name),
@@ -593,16 +1108,16 @@ function mapCuratedCamera(camera) {
     tags: [camera.country, camera.region, camera.area, camera.category, "public webcam"].filter(Boolean),
     sourceId: `curated-${slugify(camera.sourceName)}`,
     sourceName: camera.sourceName,
-    sourceUrl: camera.officialUrl,
-    officialUrl: camera.officialUrl,
-    sourcePageUrl: camera.officialUrl,
+    sourceUrl: camera.sourcePageUrl || camera.officialUrl,
+    officialUrl: camera.officialUrl || camera.sourcePageUrl,
+    sourcePageUrl: camera.sourcePageUrl || camera.officialUrl,
     lat: Number(camera.lat),
     lng: Number(camera.lng),
-    viewerType: "image",
-    capability: "snapshot",
-    capabilityLabel: "Current Still",
-    previewUrl: camera.imageUrl,
-    imageUrl: camera.imageUrl,
+    viewerType: camera.sourceOnly ? "page" : "image",
+    capability: camera.sourceOnly ? "page" : "snapshot",
+    capabilityLabel: camera.sourceOnly ? "Source Page" : "Current Still",
+    previewUrl: camera.imageUrl || "",
+    imageUrl: camera.imageUrl || "",
     refreshSeconds: 120,
   };
 }
@@ -690,6 +1205,66 @@ function cameraAdapterSpecs(scope) {
       ttlMs: 2 * 60 * 1000,
       fetcher: fetchArizona511Cameras,
     });
+    adapters.push({
+      key: "cameras:austin-open-data",
+      name: "Austin Traffic Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: fetchAustinTrafficCameras,
+    });
+    const wisconsinKey = getConfiguredSecret("wisconsin511ApiKey", ["WISCONSIN_511_API_KEY", "WI511_API_KEY"]);
+    if (wisconsinKey) {
+      adapters.push({
+        key: "cameras:wisconsin-511",
+        name: "Wisconsin 511 Cameras",
+        ttlMs: 10 * 60 * 1000,
+        fetcher: () => fetchTravelIqCameras({
+          idPrefix: "wi511",
+          sourceName: "Wisconsin 511 Cameras",
+          url: SOURCE_URLS.wisconsin511Cameras,
+          key: wisconsinKey,
+          officialUrl: "https://511wi.gov/",
+          region: "Wisconsin",
+          country: "United States",
+          tags: ["wisconsin", "wi511", "wisconsin-dot", "traffic"],
+        }),
+      });
+    }
+    const louisianaKey = getConfiguredSecret("louisiana511ApiKey", ["LOUISIANA_511_API_KEY", "LA511_API_KEY"]);
+    if (louisianaKey) {
+      adapters.push({
+        key: "cameras:louisiana-511",
+        name: "Louisiana 511 Cameras",
+        ttlMs: 10 * 60 * 1000,
+        fetcher: () => fetchTravelIqCameras({
+          idPrefix: "la511",
+          sourceName: "Louisiana 511 Cameras",
+          url: SOURCE_URLS.louisiana511Cameras,
+          key: louisianaKey,
+          officialUrl: "https://www.511la.org/",
+          region: "Louisiana",
+          country: "United States",
+          tags: ["louisiana", "la511", "ladotd", "traffic"],
+        }),
+      });
+    }
+    const driveNcKey = getConfiguredSecret("driveNcApiKey", ["DRIVENC_API_KEY", "NC511_API_KEY"]);
+    if (driveNcKey) {
+      adapters.push({
+        key: "cameras:drivenc",
+        name: "DriveNC Cameras",
+        ttlMs: 10 * 60 * 1000,
+        fetcher: () => fetchTravelIqCameras({
+          idPrefix: "drivenc",
+          sourceName: "DriveNC Cameras",
+          url: SOURCE_URLS.driveNcCameras,
+          key: driveNcKey,
+          officialUrl: "https://drivenc.gov/",
+          region: "North Carolina",
+          country: "United States",
+          tags: ["north-carolina", "drivenc", "ncdot", "traffic"],
+        }),
+      });
+    }
   }
   if (scope === "world") {
     adapters.push({
@@ -732,6 +1307,45 @@ function cameraAdapterSpecs(scope) {
       ttlMs: 2 * 60 * 1000,
       fetcher: fetchFintrafficWeathercams,
     });
+    adapters.push({
+      key: "cameras:hong-kong-traffic",
+      name: "Hong Kong Traffic Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: fetchHongKongTrafficCameras,
+    });
+    adapters.push({
+      key: "cameras:madrid-traffic",
+      name: "Madrid Traffic Cameras",
+      ttlMs: 5 * 60 * 1000,
+      fetcher: fetchMadridTrafficCameras,
+    });
+    adapters.push({
+      key: "cameras:spain-dgt",
+      name: "Spain DGT Cameras",
+      ttlMs: 60 * 60 * 1000,
+      fetcher: fetchSpainDgtCameras,
+    });
+    adapters.push({
+      key: "cameras:singapore-traffic-images",
+      name: "Singapore Traffic Images",
+      ttlMs: 90 * 1000,
+      fetcher: fetchSingaporeTrafficImages,
+    });
+    adapters.push({
+      key: "cameras:nzta-traffic",
+      name: "NZTA Traffic Cameras",
+      ttlMs: 5 * 60 * 1000,
+      fetcher: fetchNztaTrafficCameras,
+    });
+    const nswKey = getConfiguredSecret("nswTransportApiKey", ["NSW_TRANSPORT_API_KEY", "TRANSPORT_NSW_API_KEY"]);
+    if (nswKey) {
+      adapters.push({
+        key: "cameras:nsw-live-traffic",
+        name: "NSW Live Traffic Cameras",
+        ttlMs: 10 * 60 * 1000,
+        fetcher: () => fetchNswTrafficCameras(nswKey),
+      });
+    }
   }
   if (scope === "world" || scope === "us" || scope === "west") {
     adapters.push({
@@ -857,6 +1471,143 @@ async function fetchTflJamCams() {
         imageUrl,
         streamUrl: videoUrl,
         refreshSeconds: 60,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchHongKongTrafficCameras() {
+  const data = await fetchJson(SOURCE_URLS.hongKongTrafficCameras, { timeoutMs: 18000 });
+  return (data.features || [])
+    .map((feature) => {
+      const props = feature.properties || {};
+      const [x, y] = feature.geometry?.coordinates || [];
+      const point = webMercatorToLatLng(Number(x), Number(y));
+      const imageUrl = normalizeUrl(props.url);
+      if (!point || !imageUrl) return null;
+      const name = cleanCameraText(props.description || props.F_key || "Hong Kong traffic camera");
+      const district = cleanCameraText(props.district || props.region || "Hong Kong");
+      return {
+        id: `hk-td-${slugify(props.F_key || name)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area: district,
+        region: cleanCameraText(props.region || "Hong Kong"),
+        county: district,
+        country: "Hong Kong",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 2,
+        tags: ["hong-kong", "transport-department", "traffic", district].filter(Boolean),
+        sourceId: "hk-td-cctv",
+        sourceName: "Hong Kong Traffic Snapshot Images",
+        sourceUrl: SOURCE_URLS.hongKongTrafficCameras,
+        officialUrl: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images",
+        sourcePageUrl: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images",
+        lat: point.lat,
+        lng: point.lng,
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 120,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchMadridTrafficCameras() {
+  const kml = await fetchText(SOURCE_URLS.madridTrafficKml, { timeoutMs: 18000, accept: "application/vnd.google-earth.kml+xml, application/xml, text/xml, */*" });
+  const placemarks = String(kml || "").match(/<Placemark[\s\S]*?<\/Placemark>/gi) || [];
+  return placemarks
+    .map((placemark) => {
+      const coordinates = firstRegex(placemark, /<coordinates>\s*([^<]+)\s*<\/coordinates>/i);
+      const [lng, lat] = coordinates.split(",").map(Number);
+      const numero = firstRegex(placemark, /<Data\s+name="Numero"[\s\S]*?<Value>([\s\S]*?)<\/Value>/i);
+      const rawName = firstRegex(placemark, /<Data\s+name="Nombre"[\s\S]*?<Value>([\s\S]*?)<\/Value>/i) || `Madrid camera ${numero}`;
+      const imageUrl = normalizeUrl(firstRegex(placemark, /img\s+src=([^"\s>]+)/i));
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !imageUrl) return null;
+      const name = cleanCameraText(rawName);
+      return {
+        id: `madrid-${slugify(numero || name)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area: "Madrid",
+        region: "Madrid",
+        county: "Madrid",
+        country: "Spain",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 10,
+        tags: ["madrid", "spain", "traffic", "city-camera"],
+        sourceId: "madrid-traffic-kml",
+        sourceName: "Madrid Traffic Cameras",
+        sourceUrl: SOURCE_URLS.madridTrafficKml,
+        officialUrl: "https://datos.madrid.es/",
+        sourcePageUrl: "https://datos.madrid.es/",
+        lat,
+        lng,
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 600,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchSpainDgtCameras() {
+  const xml = await fetchText(SOURCE_URLS.spainDgtCameras, { timeoutMs: 35000, accept: "application/xml, text/xml, */*" });
+  const devices = String(xml || "").match(/<(?:[\w-]+:)?device\b[\s\S]*?<\/(?:[\w-]+:)?device>/gi) || [];
+  return devices
+    .map((device) => {
+      if (!/>camera</i.test(device)) return null;
+      const lat = Number(firstRegex(device, /<[^>]*latitude[^>]*>([^<]+)<\/[^>]*latitude>/i));
+      const lng = Number(firstRegex(device, /<[^>]*longitude[^>]*>([^<]+)<\/[^>]*longitude>/i));
+      const imageUrl = normalizeUrl(firstRegex(device, /<[^>]*deviceUrl[^>]*>([^<]+)<\/[^>]*deviceUrl>/i));
+      const id = firstRegex(device, /<[^>]*device\b[^>]*\bid="([^"]+)"/i) || slugify(`${lat}-${lng}`);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !imageUrl) return null;
+      const road = cleanCameraText(firstRegex(device, /<[^>]*roadName[^>]*>([^<]+)<\/[^>]*roadName>/i));
+      const province = cleanCameraText(firstRegex(device, /<[^>]*province[^>]*>([^<]+)<\/[^>]*province>/i));
+      const km = cleanCameraText(firstRegex(device, /<[^>]*kilometerPoint[^>]*>([^<]+)<\/[^>]*kilometerPoint>/i));
+      const name = [road || "DGT camera", km ? `km ${km}` : "", province].filter(Boolean).join(" ");
+      return {
+        id: `dgt-${slugify(id)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area: province || road || "Spain",
+        region: province || "Spain",
+        county: province || "Spain",
+        country: "Spain",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 60,
+        tags: ["spain", "dgt", "traffic", road, province].filter(Boolean),
+        sourceId: "spain-dgt-datex",
+        sourceName: "Spain DGT Cameras",
+        sourceUrl: SOURCE_URLS.spainDgtCameras,
+        officialUrl: "https://nap.dgt.es/",
+        sourcePageUrl: "https://nap.dgt.es/",
+        lat,
+        lng,
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 3600,
       };
     })
     .filter(Boolean);
@@ -1213,6 +1964,252 @@ function buildArizonaCameraForm(start, length) {
   return form.toString();
 }
 
+async function fetchAustinTrafficCameras() {
+  const url = new URL(SOURCE_URLS.austinTrafficCameras);
+  url.searchParams.set("$limit", "5000");
+  const rows = await fetchJson(url.href, { timeoutMs: 16000 });
+  return (Array.isArray(rows) ? rows : [])
+    .map((record) => {
+      const coords = record.location?.coordinates || [];
+      const lng = Number(coords[0] ?? record.longitude ?? record.lng);
+      const lat = Number(coords[1] ?? record.latitude ?? record.lat);
+      const imageUrl = normalizeUrl(record.screenshot_address || record.screenshot_url || record.image_url);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !imageUrl) return null;
+      const rawName = cleanCameraText(record.location_name || record.camera_id || "Austin traffic camera");
+      const name = rawName.replace(/^\s*\/\s*/, "").replace(/\s+\/\s+/g, " / ");
+      const area = cleanCameraText(record.signal_eng_area || record.jurisdiction_label || "Austin");
+      return {
+        id: `austin-${slugify(record.camera_id || record.id || name)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area: area || "Austin",
+        region: "Texas",
+        county: "Travis",
+        country: "United States",
+        category: "traffic",
+        media: "still",
+        status: cleanCameraText(record.camera_status || "Online") || "Online",
+        freshness: 1,
+        tags: ["austin", "texas", "traffic", "open-data", area].filter(Boolean),
+        sourceId: "austin-open-data",
+        sourceName: "Austin Traffic Cameras",
+        sourceUrl: SOURCE_URLS.austinTrafficCameras,
+        officialUrl: "https://data.austintexas.gov/Transportation-and-Mobility/Traffic-Cameras/b4k4-adkb",
+        sourcePageUrl: "https://data.austintexas.gov/Transportation-and-Mobility/Traffic-Cameras/b4k4-adkb",
+        lat,
+        lng,
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 60,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchSingaporeTrafficImages() {
+  const data = await fetchJson(SOURCE_URLS.singaporeTrafficImages, { timeoutMs: 12000 });
+  const item = Array.isArray(data.items) ? data.items[0] : null;
+  const cameras = Array.isArray(item?.cameras) ? item.cameras : [];
+  return cameras
+    .map((camera) => {
+      const lat = Number(camera.location?.latitude);
+      const lng = Number(camera.location?.longitude);
+      const imageUrl = normalizeUrl(camera.image);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !imageUrl) return null;
+      const id = cleanCameraText(camera.camera_id || `${lat}-${lng}`);
+      const timestamp = camera.timestamp || item?.timestamp || "";
+      return {
+        id: `sg-traffic-${slugify(id)}`,
+        dynamic: true,
+        type: "camera",
+        name: `Singapore Traffic Camera ${id}`,
+        shortName: `SG ${id}`,
+        area: "Singapore",
+        region: "Singapore",
+        county: "Singapore",
+        country: "Singapore",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 1,
+        tags: ["singapore", "data-gov-sg", "traffic", "camera", id].filter(Boolean),
+        sourceId: "singapore-traffic-images",
+        sourceName: "Singapore Traffic Images",
+        sourceUrl: SOURCE_URLS.singaporeTrafficImages,
+        officialUrl: "https://data.gov.sg/datasets/d_6cdb6b405b25aaaacbaf7689bcc6fae0/view",
+        sourcePageUrl: "https://data.gov.sg/datasets/d_6cdb6b405b25aaaacbaf7689bcc6fae0/view",
+        lat,
+        lng,
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 60,
+        observedAt: timestamp,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchNztaTrafficCameras() {
+  const xml = await fetchText(SOURCE_URLS.nztaTrafficCameras, { timeoutMs: 20000, accept: "application/xml, text/xml, */*" });
+  const cameras = String(xml || "").match(/<camera>[\s\S]*?<\/camera>/gi) || [];
+  return cameras
+    .map((entry) => {
+      const id = xmlValue(entry, "id");
+      const lat = Number(xmlValue(entry, "latitude"));
+      const lng = Number(xmlValue(entry, "longitude"));
+      const offline = /^true$/i.test(xmlValue(entry, "offline"));
+      const maintenance = /^true$/i.test(xmlValue(entry, "underMaintenance"));
+      const imagePath = xmlValue(entry, "imageUrl");
+      const thumbPath = xmlValue(entry, "thumbUrl");
+      if (!id || offline || maintenance || !Number.isFinite(lat) || !Number.isFinite(lng) || !imagePath) return null;
+      const cameraName = firstRegex(entry, /<longitude>[\s\S]*?<\/longitude>\s*<name>([\s\S]*?)<\/name>/i);
+      const name = cleanCameraText(cameraName || xmlValue(entry, "description") || `NZTA camera ${id}`);
+      const region = cleanCameraText(firstRegex(entry, /<region>[\s\S]*?<name>([\s\S]*?)<\/name>[\s\S]*?<\/region>/i) || "New Zealand");
+      const highway = cleanCameraText(xmlValue(entry, "highway"));
+      const journeyLeg = cleanCameraText(firstRegex(entry, /<journeyLeg>[\s\S]*?<name>([\s\S]*?)<\/name>[\s\S]*?<\/journeyLeg>/i));
+      const viewPath = xmlValue(entry, "viewUrl");
+      const imageUrl = new URL(imagePath, "https://trafficnz.info").href;
+      return {
+        id: `nzta-${slugify(id)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area: journeyLeg || highway || region,
+        region,
+        county: region,
+        country: "New Zealand",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 2,
+        tags: ["new-zealand", "nzta", "traffic", highway, region].filter(Boolean),
+        sourceId: "nzta-traffic",
+        sourceName: "NZTA Traffic Cameras",
+        sourceUrl: SOURCE_URLS.nztaTrafficCameras,
+        officialUrl: "https://trafficnz.info/",
+        sourcePageUrl: viewPath ? new URL(viewPath, "https://trafficnz.info").href : "https://trafficnz.info/",
+        lat,
+        lng,
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: thumbPath ? new URL(thumbPath, "https://trafficnz.info").href : imageUrl,
+        imageUrl,
+        refreshSeconds: 120,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchTravelIqCameras(source) {
+  const url = new URL(source.url);
+  url.searchParams.set("key", source.key);
+  url.searchParams.set("format", "json");
+  const records = await fetchJson(url.href, { timeoutMs: 20000 });
+  return (Array.isArray(records) ? records : [])
+    .flatMap((record) => {
+      const lat = Number(record.Latitude ?? record.latitude);
+      const lng = Number(record.Longitude ?? record.longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return [];
+      const views = Array.isArray(record.Views) && record.Views.length ? record.Views : [{ Id: record.Id, Description: record.Location, Url: record.Url, VideoUrl: record.VideoUrl, Status: "Enabled" }];
+      return views.map((view, index) => {
+        if (String(view.Status || "Enabled").toLowerCase() !== "enabled") return null;
+        const streamUrl = normalizeUrl(view.VideoUrl || view.videoUrl);
+        const sourcePageUrl = normalizeUrl(view.Url || view.url) || source.officialUrl;
+        if (!streamUrl && !sourcePageUrl) return null;
+        const name = cleanCameraText(view.Description || record.Location || record.Roadway || `${source.region} traffic camera`);
+        const county = cleanCameraText(record.County || record.county || source.region);
+        const roadway = cleanCameraText(record.Roadway || record.roadway || "");
+        return {
+          id: `${source.idPrefix}-${record.Id || record.id || "camera"}-${view.Id || view.id || index}`,
+          dynamic: true,
+          type: "camera",
+          name,
+          shortName: shortCameraName(name),
+          area: cleanCameraText(record.Location || roadway || county || source.region),
+          region: source.region,
+          county,
+          country: source.country,
+          category: "traffic",
+          media: streamUrl ? "video" : "source",
+          status: "Online",
+          freshness: 2,
+          tags: [...source.tags, roadway, county, record.Direction].filter(Boolean),
+          sourceId: source.idPrefix,
+          sourceName: source.sourceName,
+          sourceUrl: source.url,
+          officialUrl: source.officialUrl,
+          sourcePageUrl,
+          lat,
+          lng,
+          viewerType: streamUrl ? "hls" : "page",
+          capability: streamUrl ? "stream" : "candidate",
+          capabilityLabel: streamUrl ? "Live Stream" : "Source Page",
+          previewUrl: "",
+          imageUrl: "",
+          streamUrl,
+          refreshSeconds: 120,
+        };
+      }).filter(Boolean);
+    });
+}
+
+async function fetchNswTrafficCameras(apiKey) {
+  const data = await fetchJson(SOURCE_URLS.nswTrafficCameras, {
+    timeoutMs: 18000,
+    headers: { Authorization: `apikey ${apiKey}` },
+  });
+  const features = Array.isArray(data.features) ? data.features : [];
+  return features
+    .map((feature, index) => {
+      const props = feature.properties || {};
+      const [lng, lat] = feature.geometry?.coordinates || [props.longitude, props.latitude];
+      const imageUrl = normalizeUrl(props.href || props.imageUrl || props.image_url || props.url);
+      if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng)) || !imageUrl) return null;
+      const name = cleanCameraText(props.title || props.name || props.view || `NSW traffic camera ${index + 1}`);
+      const area = cleanCameraText(props.region || props.suburb || props.road || "New South Wales");
+      return {
+        id: `nsw-${slugify(props.id || props.cameraId || name || index)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area,
+        region: "New South Wales",
+        county: area,
+        country: "Australia",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 2,
+        tags: ["australia", "new-south-wales", "nsw", "transport-nsw", "traffic", area].filter(Boolean),
+        sourceId: "nsw-live-traffic",
+        sourceName: "NSW Live Traffic Cameras",
+        sourceUrl: SOURCE_URLS.nswTrafficCameras,
+        officialUrl: "https://opendata.transport.nsw.gov.au/",
+        sourcePageUrl: "https://opendata.transport.nsw.gov.au/",
+        lat: Number(lat),
+        lng: Number(lng),
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 120,
+      };
+    })
+    .filter(Boolean);
+}
+
 async function fetchCaltransCameras() {
   const results = await Promise.allSettled(
     CALTRANS_DISTRICTS.map((district) => fetchJson(caltransDistrictUrl(district), { timeoutMs: 14000 }))
@@ -1310,9 +2307,9 @@ function mapArcgisCamera(feature, source) {
   const attrLng = attributes.LONGITUDE ?? attributes.Longitude ?? attributes.longitude ?? attributes.Lon ?? attributes.lng;
   const lat = source.useGeometryCoordinates || !validLat(attrLat) ? Number(feature?.geometry?.y) : Number(attrLat);
   const lng = source.useGeometryCoordinates || !validLng(attrLng) ? Number(feature?.geometry?.x) : Number(attrLng);
-  const imageUrl = normalizeUrl(firstFieldValue(attributes, source.imageFields));
+  const imageUrl = source.sourceOnly ? "" : normalizeUrl(firstFieldValue(attributes, source.imageFields));
   const streamUrl = source.trustHls ? normalizeUrl(firstFieldValue(attributes, source.streamFields)) : "";
-  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!imageUrl && !streamUrl)) return null;
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || (!source.sourceOnly && !imageUrl && !streamUrl)) return null;
 
   const objectId =
     attributes.OBJECTID ??
@@ -1342,8 +2339,8 @@ function mapArcgisCamera(feature, source) {
     county: area,
     country: source.country,
     category: source.category || "traffic",
-    media: streamUrl ? "video" : "still",
-    status: "Online",
+    media: streamUrl ? "video" : source.sourceOnly ? "source" : "still",
+    status: source.sourceOnly ? "Source page" : "Online",
     freshness: Math.round((source.refreshSeconds || 180) / 60),
     tags: [...(source.tags || []), area, source.region, source.country].filter(Boolean),
     sourceId: `arcgis-${source.id}`,
@@ -1353,9 +2350,9 @@ function mapArcgisCamera(feature, source) {
     sourcePageUrl: normalizeUrl(firstFieldValue(attributes, source.sourcePageFields)) || source.sourcePageUrl || source.officialUrl || source.url,
     lat,
     lng,
-    viewerType: streamUrl ? "hls" : "image",
-    capability: streamUrl ? "stream" : "snapshot",
-    capabilityLabel: streamUrl ? "Live Stream" : "Current Still",
+    viewerType: streamUrl ? "hls" : source.sourceOnly ? "page" : "image",
+    capability: streamUrl ? "stream" : source.sourceOnly ? "candidate" : "snapshot",
+    capabilityLabel: streamUrl ? "Live Stream" : source.sourceOnly ? "Source Page" : "Current Still",
     previewUrl: imageUrl,
     imageUrl,
     streamUrl,
@@ -1401,6 +2398,34 @@ function normalizeUrl(value) {
   const text = cleanCameraText(value);
   if (!/^https?:\/\//i.test(text)) return "";
   return text;
+}
+
+function firstRegex(text, pattern) {
+  const match = String(text || "").match(pattern);
+  return cleanCameraText(match?.[1] || "");
+}
+
+function xmlValue(text, tagName) {
+  const pattern = new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
+  return decodeHtmlEntities(firstRegex(text, pattern));
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function webMercatorToLatLng(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  const lng = (x / 20037508.34) * 180;
+  let lat = (y / 20037508.34) * 180;
+  lat = (180 / Math.PI) * (2 * Math.atan(Math.exp((lat * Math.PI) / 180)) - Math.PI / 2);
+  if (!validLat(lat) || !validLng(lng)) return null;
+  return { lat, lng };
 }
 
 function normalizeModotUrl(value) {
@@ -1670,14 +2695,29 @@ async function resolveDynamicFeedView(camera) {
   };
 
   if (camera.viewerType === "video" && camera.streamUrl) {
-    return {
-      ...base,
-      type: "video",
-      url: camera.streamUrl,
-      sourceLabel: `${camera.sourceName || "Public source"} public video feed`,
-      capability: "stream",
-      note: "This source exposes a direct public video asset, so the dashboard can play it in-pane.",
-    };
+    const videoResult = await verifyVideoAsset(camera.streamUrl);
+    if (videoResult.ok) {
+      return {
+        ...base,
+        type: "video",
+        url: camera.streamUrl,
+        sourceLabel: `${camera.sourceName || "Public source"} public video feed`,
+        capability: "stream",
+        note: "This source exposes a direct public video asset, so the dashboard can play it in-pane.",
+      };
+    }
+
+    if (camera.imageUrl) {
+      return {
+        ...base,
+        type: "image",
+        url: camera.imageUrl,
+        sourceLabel: `${camera.sourceName || "Public source"} current image fallback`,
+        capability: "snapshot",
+        streamStatus: "down",
+        note: `The source advertises a video asset, but it did not validate right now (${videoResult.message || "unavailable"}). Showing the refreshed public image instead.`,
+      };
+    }
   }
 
   if (camera.viewerType === "hls" && camera.streamUrl) {
@@ -1745,10 +2785,31 @@ async function verifyHlsPlaylist(url) {
   return result.ok ? { ok: true } : { ok: false, message: result.message || "stream unavailable" };
 }
 
+async function verifyVideoAsset(url) {
+  const result = await getCached(`video:${url}`, 5 * 60 * 1000, async () => {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+        Accept: "video/*,*/*;q=0.8",
+        Range: "bytes=0-1",
+      },
+      signal: AbortSignal.timeout(5500),
+    });
+    if (!response.ok && response.status !== 206) throw new Error(`video returned ${response.status}`);
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType && !/video|octet-stream|binary/i.test(contentType) && !/\.(?:mp4|m4v|webm)(?:$|\?)/i.test(url)) {
+      throw new Error(`unexpected content type ${contentType}`);
+    }
+    return { ok: true };
+  });
+
+  return result.ok ? { ok: true } : { ok: false, message: result.message || "video unavailable" };
+}
+
 async function fetchSatellites(scope) {
   let records;
   try {
-    records = await fetchJson(SOURCE_URLS.celestrakActive, { timeoutMs: 12000 });
+    records = await fetchJson(SOURCE_URLS.celestrakActive, { timeoutMs: 25000 });
   } catch {
     records = await fetchCelesTrakFallbackGroups();
   }
@@ -1763,7 +2824,7 @@ async function fetchSatellites(scope) {
 async function fetchCelesTrakFallbackGroups() {
   const results = await Promise.allSettled(
     CELESTRAK_FALLBACK_GROUPS.map((group) =>
-      fetchJson(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${encodeURIComponent(group)}&FORMAT=json`, { timeoutMs: 12000 })
+      fetchJson(`https://celestrak.org/NORAD/elements/gp.php?GROUP=${encodeURIComponent(group)}&FORMAT=json`, { timeoutMs: 18000 })
     )
   );
   const byNorad = new Map();
@@ -1774,7 +2835,7 @@ async function fetchCelesTrakFallbackGroups() {
       if (key && !byNorad.has(key)) byNorad.set(key, record);
     }
   }
-  if (!byNorad.size) return fetchJson(SOURCE_URLS.celestrakVisual, { timeoutMs: 9000 });
+  if (!byNorad.size) return fetchJson(SOURCE_URLS.celestrakVisual, { timeoutMs: 15000 });
   return [...byNorad.values()];
 }
 
@@ -1871,7 +2932,8 @@ async function fetchFlights(scope) {
   }
 
   const headers = {};
-  if (process.env.OPENSKY_TOKEN) headers.Authorization = `Bearer ${process.env.OPENSKY_TOKEN}`;
+  const openskyToken = getConfiguredSecret("openskyToken", ["OPENSKY_TOKEN"]);
+  if (openskyToken) headers.Authorization = `Bearer ${openskyToken}`;
 
   let data;
   try {
@@ -1991,6 +3053,52 @@ function mapAdsbLolAircraft(aircraft) {
   };
 }
 
+async function fetchCensusDemographics() {
+  const url = new URL(SOURCE_URLS.censusAcsStatePopulation);
+  url.searchParams.set("get", "NAME,B01003_001E");
+  url.searchParams.set("for", "state:*");
+  const censusApiKey = getConfiguredSecret("censusApiKey", ["CENSUS_API_KEY"]);
+  if (censusApiKey) url.searchParams.set("key", censusApiKey);
+
+  const rows = await fetchJson(url.toString(), { timeoutMs: 12000 });
+  const [header, ...records] = Array.isArray(rows) ? rows : [];
+  if (!Array.isArray(header)) throw new Error("Census API returned an unexpected shape");
+  const nameIndex = header.indexOf("NAME");
+  const populationIndex = header.indexOf("B01003_001E");
+  const stateIndex = header.indexOf("state");
+
+  return records
+    .map((row) => {
+      const fips = String(row[stateIndex] || "").padStart(2, "0");
+      const centroid = CENSUS_STATE_CENTROIDS[fips];
+      const population = Number(row[populationIndex]);
+      if (!centroid || !Number.isFinite(population)) return null;
+      return {
+        id: `census-state-${fips}`,
+        type: "demographic",
+        name: row[nameIndex],
+        title: `${row[nameIndex]} population`,
+        area: centroid.code,
+        region: "United States",
+        lat: centroid.lat,
+        lng: centroid.lng,
+        population,
+        populationLabel: population.toLocaleString("en-US"),
+        source: "U.S. Census ACS 2023 5-year",
+        sourceUrl: "https://www.census.gov/programs-surveys/acs",
+        dataset: "B01003 total population",
+        displayColor: "#39d98a",
+        radiusKm: populationToRadius(population),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.population - left.population);
+}
+
+function populationToRadius(population) {
+  return clamp(Math.sqrt(Number(population) || 0) / 95, 45, 460);
+}
+
 async function fetchQuakes() {
   const [allDay, significant] = await Promise.all([
     fetchJson(SOURCE_URLS.usgsQuakes, { timeoutMs: 10000 }),
@@ -2085,7 +3193,7 @@ async function fetchFires(scope) {
 }
 
 function nasaFirmsMapKey() {
-  return process.env.NASA_FIRMS_MAP_KEY || process.env.FIRMS_MAP_KEY || LOCAL_CONFIG.nasaFirmsMapKey || "";
+  return getConfiguredSecret("nasaFirmsMapKey", ["NASA_FIRMS_MAP_KEY", "FIRMS_MAP_KEY"]);
 }
 
 function parseFirmsCsv(csv) {
@@ -2285,6 +3393,148 @@ function mapNwsAlertFeatures(features, area) {
   });
 }
 
+async function fetchNhcStormAlerts() {
+  const data = await fetchJson(SOURCE_URLS.nhcCurrentStorms, { timeoutMs: 9000 });
+  const storms = Array.isArray(data.activeStorms) ? data.activeStorms : [];
+  return storms
+    .map((storm, index) => {
+      const lat = Number(storm.lat || storm.latitude || storm.centerLat || storm.currentLat);
+      const lng = Number(storm.lon || storm.lng || storm.longitude || storm.centerLon || storm.centerLng || storm.currentLon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      const name = storm.name || storm.stormName || storm.binNumber || `Tropical system ${index + 1}`;
+      return {
+        id: `nhc-${storm.id || storm.stormId || storm.binNumber || slugify(name)}`,
+        type: "alert",
+        name: `${name} tropical weather`,
+        title: `${name} tropical weather`,
+        event: storm.classification || storm.type || "NHC tropical weather",
+        lat,
+        lng,
+        region: storm.basin || "Atlantic/Caribbean",
+        areaSummary: "National Hurricane Center active storm",
+        area: "NHC",
+        severity: storm.intensity || storm.classification || "Tropical",
+        urgency: "Monitor",
+        certainty: "Observed",
+        radiusKm: 320,
+        time: storm.lastUpdate || storm.publicAdvisoryTime || new Date().toISOString(),
+        instruction: "Open the NHC advisory for official forecast details.",
+        source: "NHC",
+        url: storm.publicAdvisory?.url || storm.forecastTrack?.url || "https://www.nhc.noaa.gov/",
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchCubaOpenReports() {
+  const url = new URL(SOURCE_URLS.gdeltCubaDocs);
+  url.searchParams.set("query", '(Cuba OR Havana OR Varadero OR "Florida Straits")');
+  url.searchParams.set("mode", "artlist");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("timespan", "24h");
+  url.searchParams.set("maxrecords", "8");
+  url.searchParams.set("sort", "datedesc");
+  const data = await fetchJson(url.toString(), { timeoutMs: 12000 });
+  const articles = Array.isArray(data.articles) ? data.articles : [];
+  return articles.map((article, index) => {
+    const title = cleanCameraText(article.title || "Cuba public report");
+    return {
+      id: `cuba-report-${hashKey(article.url || title || index)}`,
+      type: "alert",
+      name: title,
+      title,
+      event: "Open reporting",
+      lat: 23.1136 + (index % 3) * 0.08,
+      lng: -82.3666 + (index % 4) * 0.08,
+      region: "Cuba",
+      areaSummary: article.domain || "GDELT public reporting",
+      area: "CU",
+      severity: "Open Source",
+      urgency: "Monitor",
+      certainty: "Reported",
+      radiusKm: 65,
+      time: parseGdeltDate(article.seendate) || new Date().toISOString(),
+      instruction: "Public media signal from GDELT. Treat as reporting context, not official confirmation.",
+      source: "GDELT",
+      url: article.url || "",
+    };
+  });
+}
+
+function parseGdeltDate(value) {
+  const text = String(value || "");
+  const match = text.match(/^(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})?Z?$/);
+  if (!match) return "";
+  const [, year, month, day, hour, minute, second = "00"] = match;
+  return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`).toISOString();
+}
+
+function buildCubaReferenceSignals() {
+  const now = new Date().toISOString();
+  return [
+    {
+      id: "cuba-ref-ioda-internet",
+      type: "alert",
+      name: "Cuba internet outage monitor",
+      title: "Cuba internet outage monitor",
+      event: "Reference monitor",
+      lat: 23.1136,
+      lng: -82.3666,
+      region: "Cuba",
+      areaSummary: "IODA Internet outage dashboard",
+      area: "CU",
+      severity: "Reference",
+      urgency: "Monitor",
+      certainty: "Dashboard",
+      radiusKm: 80,
+      time: now,
+      instruction: "Open IODA for country-level Internet outage and routing signal context.",
+      source: "IODA",
+      url: "https://ioda.inetintel.cc.gatech.edu/country/CU",
+    },
+    {
+      id: "cuba-ref-nhc-caribbean",
+      type: "alert",
+      name: "Caribbean tropical weather monitor",
+      title: "Caribbean tropical weather monitor",
+      event: "Reference monitor",
+      lat: 21.8,
+      lng: -80.0,
+      region: "Cuba / Caribbean",
+      areaSummary: "NHC tropical weather products",
+      area: "CU",
+      severity: "Reference",
+      urgency: "Monitor",
+      certainty: "Dashboard",
+      radiusKm: 160,
+      time: now,
+      instruction: "Open NHC for official tropical cyclone outlooks, cones, and advisories.",
+      source: "NHC",
+      url: "https://www.nhc.noaa.gov/",
+    },
+    {
+      id: "cuba-ref-state-advisory",
+      type: "alert",
+      name: "Cuba travel advisory reference",
+      title: "Cuba travel advisory reference",
+      event: "Reference monitor",
+      lat: 23.1136,
+      lng: -82.3666,
+      region: "Cuba",
+      areaSummary: "U.S. State Department country advisory",
+      area: "CU",
+      severity: "Reference",
+      urgency: "Monitor",
+      certainty: "Dashboard",
+      radiusKm: 55,
+      time: now,
+      instruction: "Open the official travel advisory page for current public State Department guidance.",
+      source: "U.S. State Department",
+      url: "https://travel.state.gov/content/travel/en/traveladvisories/traveladvisories/cuba-travel-advisory.html",
+    },
+  ];
+}
+
 function alertGeometryRings(geometry) {
   if (!geometry || !Array.isArray(geometry.coordinates)) return [];
   const rawRings = [];
@@ -2408,8 +3658,8 @@ function buildEvents({ cameras, satellites, flights, quakes, alerts, fires }) {
     severity: quake.severity,
   }));
 
-  const actionableAlerts = alerts.filter((alert) => !/test message/i.test(`${alert.event || ""} ${alert.title || ""}`));
-  const alertEvents = (actionableAlerts.length ? actionableAlerts : alerts).slice(0, 5).map((alert) => ({
+  const actionableAlerts = sortAlertsForDisplay(alerts).filter(isActionableAlert);
+  const alertEvents = (actionableAlerts.length ? actionableAlerts : sortAlertsForDisplay(alerts)).slice(0, 10).map((alert) => ({
     id: alert.id,
     type: "alert",
     title: alert.title,
@@ -2451,6 +3701,42 @@ function buildEvents({ cameras, satellites, flights, quakes, alerts, fires }) {
   return [...alertEvents, ...fireEvents, ...quakeEvents, ...flightEvents, ...satEvents, ...cameraEvents]
     .sort((left, right) => (priority[left.type] ?? 9) - (priority[right.type] ?? 9) || Date.parse(right.time || 0) - Date.parse(left.time || 0))
     .slice(0, 24);
+}
+
+function sortAlertsForDisplay(alerts = []) {
+  return [...alerts].sort((left, right) => {
+    const leftTier = alertDisplayTier(left);
+    const rightTier = alertDisplayTier(right);
+    if (leftTier !== rightTier) return leftTier - rightTier;
+    const leftTime = Date.parse(left.time || left.updated || left.effective || "") || 0;
+    const rightTime = Date.parse(right.time || right.updated || right.effective || "") || 0;
+    if (leftTime !== rightTime) return rightTime - leftTime;
+    return alertPriority(right) - alertPriority(left);
+  });
+}
+
+function isActionableAlert(alert = {}) {
+  return alertDisplayTier(alert) < 2;
+}
+
+function alertDisplayTier(alert = {}) {
+  const text = `${alert.event || ""} ${alert.title || ""} ${alert.severity || ""} ${alert.source || ""}`;
+  if (/test message/i.test(text) || isReferenceAlert(alert)) return 2;
+  if (/open reporting|open source|gdelt/i.test(text)) return 1;
+  return 0;
+}
+
+function isReferenceAlert(alert = {}) {
+  return /reference/i.test(`${alert.event || ""} ${alert.severity || ""}`) || /reference monitor/i.test(alert.id || "");
+}
+
+function alertPriority(alert = {}) {
+  const label = String(alert.severity || "").toLowerCase();
+  if (/extreme|critical/.test(label)) return 5;
+  if (/severe|high/.test(label)) return 4;
+  if (/moderate|medium/.test(label)) return 3;
+  if (/minor|low/.test(label)) return 2;
+  return 1;
 }
 
 function buildRegions({ cameras, satellites, flights, quakes, alerts, fires }) {
@@ -2561,32 +3847,76 @@ function normalizeScope(value) {
   return Object.prototype.hasOwnProperty.call(SCOPE_BOUNDS, value) ? value : "world";
 }
 
-async function getCached(key, ttlMs, builder) {
+async function getCached(key, ttlMs, builder, options = {}) {
   const now = Date.now();
   const cached = cache.get(key);
   if (cached && cached.expiresAt > now) {
-    return { ok: true, data: cached.data, cached: true };
+    return { ok: true, data: cached.data, cached: true, updatedAt: cached.updatedAt };
   }
 
+  const persist = options.persist ?? !/^(embed|hls):/.test(key);
   try {
     const data = await builder();
     cache.set(key, { data, expiresAt: now + ttlMs, updatedAt: now });
-    return { ok: true, data, cached: false };
+    if (persist) writeRuntimeCache(key, data, now);
+    return { ok: true, data, cached: false, updatedAt: now };
   } catch (error) {
     if (cached) {
-      return { ok: false, data: cached.data, cached: true, stale: true, message: error.message };
+      return { ok: true, data: cached.data, cached: true, stale: true, updatedAt: cached.updatedAt, message: `Using in-memory cache: ${error.message}` };
+    }
+    if (persist) {
+      const diskCache = readRuntimeCache(key, options.staleTtlMs ?? 7 * 24 * 60 * 60 * 1000);
+      if (diskCache) {
+        cache.set(key, { data: diskCache.data, expiresAt: now + Math.min(ttlMs, 60 * 1000), updatedAt: diskCache.updatedAt });
+        return {
+          ok: true,
+          data: diskCache.data,
+          cached: true,
+          stale: true,
+          updatedAt: diskCache.updatedAt,
+          message: `Using saved cache from ${new Date(diskCache.updatedAt).toLocaleString()}: ${error.message}`,
+        };
+      }
     }
     return { ok: false, data: [], cached: false, message: error.message };
   }
 }
 
-function healthFromResult(name, result, count) {
+function runtimeCachePath(key) {
+  const digest = hashString(key).toString(36);
+  return path.join(RUNTIME_CACHE_DIR, `${slugify(key)}-${digest}.json`);
+}
+
+function readRuntimeCache(key, maxAgeMs) {
+  try {
+    const filePath = runtimeCachePath(key);
+    if (!fs.existsSync(filePath)) return null;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const updatedAt = Number(parsed.updatedAt || parsed.cachedAt || 0);
+    if (!updatedAt || Date.now() - updatedAt > maxAgeMs) return null;
+    return { data: parsed.data, updatedAt };
+  } catch {
+    return null;
+  }
+}
+
+function writeRuntimeCache(key, data, updatedAt) {
+  try {
+    fs.mkdirSync(RUNTIME_CACHE_DIR, { recursive: true });
+    fs.writeFileSync(runtimeCachePath(key), `${JSON.stringify({ updatedAt, data })}\n`);
+  } catch {
+    // Runtime cache is a resilience layer only; failed writes should never break live data.
+  }
+}
+
+function healthFromResult(name, result, count, options = {}) {
   return {
     name,
     ok: result.ok,
     count,
     cached: result.cached,
     stale: result.stale || false,
+    optional: Boolean(options.optional),
     message: result.message || "",
   };
 }
@@ -2692,6 +4022,12 @@ function clampInt(value, min, max, fallback) {
   return Math.min(max, Math.max(min, numeric));
 }
 
+function clamp(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return min;
+  return Math.min(max, Math.max(min, numeric));
+}
+
 async function proxyImage(imageUrl, response) {
   if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) {
     return sendJson(response, 400, { error: "Missing or unsupported image URL" });
@@ -2723,7 +4059,12 @@ async function proxyImage(imageUrl, response) {
 function serveStatic(requestPath, response) {
   const safePath = requestPath === "/" ? "/index.html" : decodeURIComponent(requestPath);
   const filePath = path.resolve(ROOT, `.${safePath}`);
-  if (!filePath.startsWith(ROOT)) return sendText(response, 403, "Forbidden");
+  const relativePath = path.relative(ROOT, filePath);
+  const pathParts = relativePath.split(path.sep);
+  const isContained = relativePath && !relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath);
+  const isPublicFile = relativePath === "index.html" || relativePath.startsWith(`assets${path.sep}`);
+  const hasHiddenSegment = pathParts.some((part) => part.startsWith("."));
+  if (!isContained || !isPublicFile || hasHiddenSegment) return sendText(response, 403, "Forbidden");
 
   fs.readFile(filePath, (error, data) => {
     if (error) return sendText(response, 404, "Not found");
@@ -2741,7 +4082,6 @@ function sendJson(response, status, payload) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-cache",
-    "Access-Control-Allow-Origin": "*",
   });
   response.end(JSON.stringify(payload));
 }
@@ -2749,6 +4089,106 @@ function sendJson(response, status, payload) {
 function sendText(response, status, text) {
   response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache" });
   response.end(text);
+}
+
+function isSameOriginLocalRequest(request) {
+  const origin = request.headers.origin;
+  if (!origin) return true;
+
+  try {
+    const originUrl = new URL(origin);
+    const hostname = originUrl.hostname.toLowerCase();
+    const isLoopback = hostname === "127.0.0.1" || hostname === "localhost";
+    return isLoopback && originUrl.host.toLowerCase() === String(request.headers.host || "").toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 32_000) {
+        reject(new Error("Request body too large"));
+        request.destroy();
+      }
+    });
+    request.on("end", () => {
+      if (!body.trim()) return resolve({});
+      try {
+        resolve(JSON.parse(body));
+      } catch {
+        reject(new Error("Invalid JSON body"));
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+const USER_SETTING_FIELDS = [
+  { key: "nasaFirmsMapKey", label: "NASA FIRMS map key", env: ["NASA_FIRMS_MAP_KEY", "FIRMS_MAP_KEY"] },
+  { key: "openskyToken", label: "OpenSky API token", env: ["OPENSKY_TOKEN"] },
+  { key: "googleMapsApiKey", label: "Google Maps / 3D Tiles key", env: ["GOOGLE_MAPS_API_KEY", "GOOGLE_EARTH_API_KEY"] },
+  { key: "flightradar24ApiKey", label: "Flightradar24 API key", env: ["FLIGHTRADAR24_API_KEY", "FR24_API_KEY"] },
+  { key: "cesiumIonToken", label: "Cesium ion token", env: ["CESIUM_ION_TOKEN"] },
+  { key: "openAqApiKey", label: "OpenAQ API key", env: ["OPENAQ_API_KEY"] },
+  { key: "censusApiKey", label: "Census API key", env: ["CENSUS_API_KEY"] },
+  { key: "wisconsin511ApiKey", label: "Wisconsin 511 API key", env: ["WISCONSIN_511_API_KEY", "WI511_API_KEY"] },
+  { key: "louisiana511ApiKey", label: "Louisiana 511 API key", env: ["LOUISIANA_511_API_KEY", "LA511_API_KEY"] },
+  { key: "driveNcApiKey", label: "DriveNC API key", env: ["DRIVENC_API_KEY", "NC511_API_KEY"] },
+  { key: "nswTransportApiKey", label: "Transport for NSW API key", env: ["NSW_TRANSPORT_API_KEY", "TRANSPORT_NSW_API_KEY"] },
+];
+
+function publicSettings() {
+  return {
+    updatedAt: USER_CONFIG.updatedAt || "",
+    settings: USER_SETTING_FIELDS.map((field) => ({
+      key: field.key,
+      label: field.label,
+      configured: Boolean(getConfiguredSecret(field.key, field.env)),
+      local: Boolean(USER_CONFIG[field.key]),
+      bundled: Boolean(BUNDLED_CONFIG[field.key]),
+      env: field.env.some((name) => Boolean(process.env[name])),
+    })),
+  };
+}
+
+function updateLocalSettings(payload = {}) {
+  for (const field of USER_SETTING_FIELDS) {
+    const value = payload[field.key];
+    const clear = payload[`${field.key}Clear`];
+    if (clear) {
+      delete USER_CONFIG[field.key];
+      LOCAL_CONFIG[field.key] = BUNDLED_CONFIG[field.key] || "";
+    } else if (typeof value === "string" && value.trim()) {
+      USER_CONFIG[field.key] = value.trim();
+      LOCAL_CONFIG[field.key] = value.trim();
+    }
+  }
+  USER_CONFIG.updatedAt = new Date().toISOString();
+  saveLocalConfig();
+  cache.clear();
+  return publicSettings();
+}
+
+function getConfiguredSecret(key, envNames = []) {
+  for (const envName of envNames) {
+    if (process.env[envName]) return process.env[envName];
+  }
+  return LOCAL_CONFIG[key] || "";
+}
+
+function saveLocalConfig() {
+  const serializable = {};
+  for (const field of USER_SETTING_FIELDS) {
+    if (USER_CONFIG[field.key]) serializable[field.key] = USER_CONFIG[field.key];
+  }
+  if (USER_CONFIG.updatedAt) serializable.updatedAt = USER_CONFIG.updatedAt;
+  fs.mkdirSync(path.dirname(USER_CONFIG_PATH), { recursive: true });
+  fs.writeFileSync(USER_CONFIG_PATH, `${JSON.stringify(serializable, null, 2)}\n`);
 }
 
 function capabilityLabel(capability) {
@@ -2777,6 +4217,15 @@ function slugify(value) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48) || "camera";
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  for (const char of String(value || "")) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
 }
 
 function deterministicSample(items, max, keySelector = "id") {
@@ -2821,12 +4270,20 @@ function loadBrowserExport(filePath, exportName) {
   return context.__export__;
 }
 
-function loadLocalConfig() {
-  const candidates = [
+function loadBundledConfig() {
+  return loadConfigFromCandidates([
     path.join(ROOT, "config.local.json"),
     path.join(ROOT, "resources", "config.local.json"),
-  ];
+    path.join(path.dirname(ROOT), "config.local.json"),
+    path.join(path.dirname(ROOT), "resources", "config.local.json"),
+  ]);
+}
 
+function loadUserConfig() {
+  return loadConfigFromCandidates([USER_CONFIG_PATH]);
+}
+
+function loadConfigFromCandidates(candidates = []) {
   for (const filePath of candidates) {
     try {
       if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -2834,7 +4291,6 @@ function loadLocalConfig() {
       console.warn(`Unable to read ${path.basename(filePath)}: ${error.message}`);
     }
   }
-
   return {};
 }
 
@@ -2859,5 +4315,5 @@ function listenOnPreferredPort(index) {
 
   server.once("listening", handleListening);
   server.once("error", handleError);
-  server.listen(port);
+  server.listen(port, "127.0.0.1");
 }

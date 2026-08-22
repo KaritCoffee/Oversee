@@ -39,6 +39,7 @@
     { id: "quakes", label: "Quakes", color: "#ff4e57", icon: "activity" },
     { id: "fires", label: "Fires", color: "#ff7a1a", icon: "flame" },
     { id: "alerts", label: "Alerts", color: "#18f0a0", icon: "bell-ring" },
+    { id: "demographics", label: "Population", color: "#39d98a", icon: "users" },
   ];
 
   const CAMERA_FILTERS = [
@@ -53,7 +54,17 @@
     {
       name: "Global Camera Adapters",
       status: "Mixed live/still feeds",
-      detail: "Combines curated public cameras with official no-key feeds from NYC DOT, Caltrans, TfL JamCams, Iowa DOT, Ireland TII, Toronto, Florida 511, Georgia DOT, KYTC/Indiana, Redmond, and Lawrence.",
+      detail: "Combines curated public cameras with official no-key feeds from NYC DOT, Caltrans, TfL JamCams, Iowa DOT, Austin, Illinois Gateway, Florida 511, Georgia DOT, KYTC/Indiana, PennDOT, Redmond, Lawrence, and more.",
+    },
+    {
+      name: "International Camera Catalogs",
+      status: "Free public feeds",
+      detail: "Adds no-key camera catalogs from Spain DGT, Madrid open data, Hong Kong Transport Department, Singapore traffic images, NZTA New Zealand, Panama Canal pages, and other official public portals where direct media is available.",
+    },
+    {
+      name: "Bring-Your-Own-Key Camera APIs",
+      status: "Optional official feeds",
+      detail: "Wisconsin 511, Louisiana 511, DriveNC, and Transport for NSW adapters stay inactive until the user enters their own developer key in Settings.",
     },
     {
       name: "CelesTrak GP Data",
@@ -78,7 +89,7 @@
     {
       name: "OpenSky Network",
       status: "Best effort",
-      detail: "Public aircraft states refresh automatically when anonymous rate limits allow it; trails show recent heading.",
+      detail: "Public aircraft states are cached for 10 minutes to respect anonymous rate limits; trails show recent heading and observed movement.",
     },
     {
       name: "USGS Earthquakes",
@@ -96,9 +107,24 @@
       detail: "USGS Topo can be selected as the Cesium globe basemap for a more map-like planning view without an API key.",
     },
     {
+      name: "U.S. Census ACS",
+      status: "Free public demographics",
+      detail: "State-level ACS population points add people/context signals near alerts, fires, cameras, and quake activity without needing an API key.",
+    },
+    {
       name: "National Weather Service",
       status: "Free public API",
       detail: "Active United States alerts add official hazard context where public NWS coverage exists.",
+    },
+    {
+      name: "National Hurricane Center",
+      status: "Free public tropical weather feed",
+      detail: "Active NHC tropical systems are pulled into the Alerts layer so Caribbean storms can appear near Cuba when active.",
+    },
+    {
+      name: "GDELT Cuba Reporting",
+      status: "Best effort public reporting",
+      detail: "Recent public reporting mentioning Cuba/Havana is geolocated near Cuba as context signals; treat these as media indicators, not official confirmation.",
     },
     {
       name: "OpenAQ",
@@ -119,6 +145,7 @@
     quakes: "#ff4e57",
     fires: "#ff7a1a",
     alerts: "#18f0a0",
+    demographics: "#39d98a",
     traffic: "#1aa7ff",
     city: "#19e2ff",
     wildfire: "#ff7a1a",
@@ -135,8 +162,10 @@
     layers: Object.fromEntries(LAYERS.map((layer) => [layer.id, true])),
     snapshot: null,
     query: "",
+    searchPanelOpen: false,
     cameraFilter: "all",
     includeDownStreams: false,
+    showCameraMapMarkers: true,
     downStreamIds: new Set(),
     catalogLimit: 120,
     assetLimit: 6,
@@ -146,6 +175,7 @@
     selection: null,
     feedView: null,
     regionSortAlpha: false,
+    collapsedPanels: loadCollapsedPanels(),
     cameraMap: null,
     cameraLayer: null,
     radarLayer: null,
@@ -155,7 +185,18 @@
     globeWeatherOverlay: false,
     globeFloodOverlay: false,
     idleSpin: false,
+    demoMode: false,
+    demoTimer: null,
+    demoLinkTimer: null,
+    demoIndex: 0,
+    demoCamera: null,
+    demoHls: null,
+    demoResolving: false,
+    demoFeedPool: [],
+    demoFeedPoolScope: "",
+    demoPreviousIdleSpin: false,
     seenAlertIds: null,
+    settings: null,
     audioContext: null,
     cameraRenderer: null,
     hls: null,
@@ -193,11 +234,15 @@
     baseLayer: null,
     sources: {},
     selectionSource: null,
+    renderRetry: null,
   };
 
   const els = {
     body: document.body,
     searchInput: document.getElementById("searchInput"),
+    openSearchPanel: document.getElementById("openSearchPanel"),
+    searchModal: document.getElementById("searchModal"),
+    searchResults: document.getElementById("searchResults"),
     systemStatusLabel: document.getElementById("systemStatusLabel"),
     systemStatusSub: document.getElementById("systemStatusSub"),
     clockUtc: document.getElementById("clockUtc"),
@@ -206,10 +251,18 @@
     cycleSensorMode: document.getElementById("cycleSensorMode"),
     focusHome: document.getElementById("focusHome"),
     toggleIdleSpin: document.getElementById("toggleIdleSpin"),
+    toggleDemoMode: document.getElementById("toggleDemoMode"),
+    closeDemoMode: document.getElementById("closeDemoMode"),
     openSourcePanel: document.getElementById("openSourcePanel"),
+    openSettingsPanel: document.getElementById("openSettingsPanel"),
     closeSourcePanel: document.getElementById("closeSourcePanel"),
+    closeSettingsPanel: document.getElementById("closeSettingsPanel"),
     sourceDrawer: document.getElementById("sourceDrawer"),
+    settingsDrawer: document.getElementById("settingsDrawer"),
     sourceGrid: document.getElementById("sourceGrid"),
+    settingsForm: document.getElementById("settingsForm"),
+    settingsGrid: document.getElementById("settingsGrid"),
+    settingsStatus: document.getElementById("settingsStatus"),
     scopeControls: document.getElementById("scopeControls"),
     globeRendererControls: document.getElementById("globeRendererControls"),
     earthViewControls: document.getElementById("earthViewControls"),
@@ -227,6 +280,7 @@
     sortRegions: document.getElementById("sortRegions"),
     cameraFilterControls: document.getElementById("cameraFilterControls"),
     includeDownStreams: document.getElementById("includeDownStreams"),
+    showCameraMapMarkers: document.getElementById("showCameraMapMarkers"),
     loadMoreCameras: document.getElementById("loadMoreCameras"),
     openSignalModal: document.getElementById("openSignalModal"),
     openLayerModal: document.getElementById("openLayerModal"),
@@ -257,6 +311,14 @@
     clearSearch: document.getElementById("clearSearch"),
     resetMapArea: document.getElementById("resetMapArea"),
     selectionCard: document.getElementById("selectionCard"),
+    demoCallout: document.getElementById("demoCallout"),
+    demoTitle: document.getElementById("demoTitle"),
+    demoMeta: document.getElementById("demoMeta"),
+    demoMedia: document.getElementById("demoMedia"),
+    demoStatus: document.getElementById("demoStatus"),
+    demoLink: document.getElementById("demoLink"),
+    demoLinkLine: document.getElementById("demoLinkLine"),
+    demoLinkDot: document.getElementById("demoLinkDot"),
     stage: document.querySelector(".stage"),
     globeCanvas: document.getElementById("globeCanvas"),
     cesiumGlobe: document.getElementById("cesiumGlobe"),
@@ -269,6 +331,8 @@
     bindEvents();
     renderStaticControls();
     renderSourceDrawer();
+    applyCollapsedPanels();
+    loadSettings();
     initClock();
     initGlobe();
     initCesiumGlobe();
@@ -283,26 +347,34 @@
   function bindEvents() {
     els.searchInput.addEventListener("input", (event) => {
       state.query = event.target.value.trim().toLowerCase();
-      state.mapListMode = false;
       state.catalogLimit = 120;
+      renderSearchResults();
       renderCatalog();
       renderAssets();
-      renderCameraMap({ fit: true });
       renderGlobeLayers();
     });
 
     els.searchInput.addEventListener("keydown", (event) => {
       if (event.key !== "Enter") return;
       const first = getSearchMatches()[0];
-      if (first) selectObject(first.type, first.item, { focus: true });
+      if (first) {
+        event.preventDefault();
+        selectSearchResult(first.type, first.item);
+      }
     });
 
+    els.openSearchPanel.addEventListener("click", () => toggleSearchModal(true));
     els.refreshAll.addEventListener("click", () => refreshSnapshot({ force: true }));
     els.focusHome.addEventListener("click", () => setScope("us"));
     els.toggleIdleSpin.addEventListener("click", toggleIdleSpin);
+    els.toggleDemoMode.addEventListener("click", () => toggleDemoMode(!state.demoMode));
+    els.closeDemoMode.addEventListener("click", () => toggleDemoMode(false));
     els.cycleSensorMode.addEventListener("click", cycleSensorMode);
     els.openSourcePanel.addEventListener("click", () => toggleSourceDrawer(true));
+    els.openSettingsPanel.addEventListener("click", () => toggleSettingsDrawer(true));
     els.closeSourcePanel.addEventListener("click", () => toggleSourceDrawer(false));
+    els.closeSettingsPanel.addEventListener("click", () => toggleSettingsDrawer(false));
+    els.settingsForm.addEventListener("submit", saveSettings);
     els.openAlertDrawer.addEventListener("click", () => toggleAlertDrawer());
     els.closeAlertDrawer.addEventListener("click", () => toggleAlertDrawer(false));
     els.toggleGlobeWeather.addEventListener("click", toggleGlobeWeatherOverlay);
@@ -343,6 +415,11 @@
       renderCameraMap();
       renderGlobeLayers();
     });
+    els.showCameraMapMarkers.addEventListener("change", (event) => {
+      state.showCameraMapMarkers = event.target.checked;
+      renderCatalog();
+      renderCameraMap();
+    });
     els.loadMoreCameras.addEventListener("click", () => {
       state.catalogLimit += 120;
       renderCatalog();
@@ -358,7 +435,7 @@
 
       const nav = event.target.closest("[data-view-jump]");
       if (nav) {
-        document.getElementById(nav.dataset.viewJump)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        scrollToView(nav.dataset.viewJump);
         if (nav.classList.contains("nav-button")) {
           document.querySelectorAll(".nav-button").forEach((button) => button.classList.remove("active"));
           nav.classList.add("active");
@@ -368,8 +445,9 @@
       const action = event.target.closest("[data-select-type]");
       if (action) {
         const item = findItem(action.dataset.selectType, action.dataset.selectId);
-        if (item) selectObject(action.dataset.selectType, item, { focus: action.dataset.focus === "true" });
+        if (item) selectObject(action.dataset.selectType, item, { focus: action.dataset.focus === "true", scrollToWatch: action.dataset.scrollWatch === "true", pulse: action.dataset.pulse === "true" });
         if (action.closest("#alertDrawer")) toggleAlertDrawer(false);
+        if (action.closest("#searchModal")) toggleSearchModal(false);
       }
 
       const pinAction = event.target.closest("[data-pin-asset]");
@@ -395,28 +473,41 @@
       if (event.target.closest("[data-close-modal]")) {
         toggleInsightModal("signal", false);
         toggleInsightModal("layer", false);
+        toggleSearchModal(false);
       }
 
       const searchTerm = event.target.closest("[data-search-term]");
       if (searchTerm) {
-        applySearch(searchTerm.dataset.searchTerm || "");
+        applySearch(searchTerm.dataset.searchTerm || "", { open: searchTerm.closest("#searchModal") ? false : true });
       }
+
+      const collapseButton = event.target.closest("[data-collapse-panel]");
+      if (collapseButton) togglePanelCollapse(collapseButton.dataset.collapsePanel);
     });
 
     document.addEventListener("pointerdown", primeAlertAudio, { once: true, passive: true });
+    document.addEventListener("fullscreenchange", () => {
+      if (state.demoMode) window.setTimeout(resizeGlobe, 120);
+    });
   }
 
-  function applySearch(term) {
+  function applySearch(term, options = {}) {
     state.query = term.trim().toLowerCase();
     state.cameraFilter = "all";
-    state.mapListMode = false;
     state.catalogLimit = 120;
     els.searchInput.value = term;
+    if (options.open) toggleSearchModal(true);
     renderCameraFilters();
+    renderSearchResults();
     renderCatalog();
     renderAssets();
-    renderCameraMap({ fit: true });
     renderGlobeLayers();
+  }
+
+  function scrollToView(viewId) {
+    const target = viewId === "map" ? els.stage : document.getElementById(viewId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: viewId === "map" ? "center" : "start" });
   }
 
   function renderStaticControls() {
@@ -513,6 +604,85 @@
   function toggleSourceDrawer(open) {
     els.sourceDrawer.classList.toggle("open", open);
     els.sourceDrawer.setAttribute("aria-hidden", open ? "false" : "true");
+    if (open) toggleSettingsDrawer(false);
+  }
+
+  function toggleSettingsDrawer(open) {
+    els.settingsDrawer.classList.toggle("open", open);
+    els.settingsDrawer.setAttribute("aria-hidden", open ? "false" : "true");
+    if (open) {
+      toggleSourceDrawer(false);
+      loadSettings();
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const response = await fetch(`/api/settings?ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`Settings failed with status ${response.status}`);
+      state.settings = await response.json();
+      renderSettings();
+    } catch (error) {
+      els.settingsStatus.textContent = `Settings unavailable: ${error.message}`;
+    }
+  }
+
+  function renderSettings() {
+    const settings = state.settings?.settings || [];
+    els.settingsGrid.innerHTML = settings.map((setting) => `
+      <label class="settings-field">
+        <span>
+          <strong>${escapeHtml(setting.label)}</strong>
+          <small>${settingStatusText(setting)}</small>
+        </span>
+        <input
+          type="password"
+          name="${escapeHtml(setting.key)}"
+          autocomplete="off"
+          placeholder="${setting.configured ? "Configured - enter a new value to replace" : "Paste key or token"}"
+        />
+        <label class="clear-key">
+          <input type="checkbox" name="${escapeHtml(setting.key)}Clear" ${setting.env ? "disabled" : ""} />
+          <span>Clear local key</span>
+        </label>
+      </label>
+    `).join("");
+    els.settingsStatus.textContent = state.settings?.updatedAt
+      ? `Local settings updated ${formatTimeAgo(state.settings.updatedAt)}`
+      : "Keys are masked after saving.";
+  }
+
+  function settingStatusText(setting) {
+    if (setting.env) return "Configured by environment";
+    if (setting.local) return "Configured locally";
+    if (setting.bundled) return "Configured by bundled default";
+    if (setting.configured) return "Configured";
+    return "Not configured";
+  }
+
+  async function saveSettings(event) {
+    event.preventDefault();
+    const formData = new FormData(els.settingsForm);
+    const payload = {};
+    for (const setting of state.settings?.settings || []) {
+      const value = String(formData.get(setting.key) || "").trim();
+      if (value) payload[setting.key] = value;
+      if (formData.get(`${setting.key}Clear`)) payload[`${setting.key}Clear`] = true;
+    }
+    els.settingsStatus.textContent = "Saving local settings...";
+    try {
+      const response = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`Save failed with status ${response.status}`);
+      state.settings = await response.json();
+      renderSettings();
+      refreshSnapshot({ keepSelection: true, quiet: false, force: true });
+    } catch (error) {
+      els.settingsStatus.textContent = error.message;
+    }
   }
 
   function toggleAlertDrawer(open) {
@@ -526,6 +696,341 @@
     state.idleSpin = !state.idleSpin;
     els.toggleIdleSpin.classList.toggle("active", state.idleSpin);
     els.toggleIdleSpin.setAttribute("aria-pressed", state.idleSpin ? "true" : "false");
+  }
+
+  async function toggleDemoMode(open, options = {}) {
+    const shouldOpen = Boolean(open);
+    if (shouldOpen === state.demoMode) return;
+    state.demoMode = shouldOpen;
+    els.stage.classList.toggle("demo-active", shouldOpen);
+    els.toggleDemoMode.classList.toggle("active", shouldOpen);
+    els.toggleDemoMode.setAttribute("aria-pressed", shouldOpen ? "true" : "false");
+    els.demoCallout.classList.toggle("visible", shouldOpen);
+    els.demoCallout.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
+    els.demoLink.classList.toggle("visible", shouldOpen);
+
+    if (shouldOpen) {
+      state.demoPreviousIdleSpin = state.idleSpin;
+      state.idleSpin = true;
+      els.toggleIdleSpin.classList.add("active");
+      els.toggleIdleSpin.setAttribute("aria-pressed", "true");
+      clearSelectionCard();
+      document.getElementById("overview")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (document.fullscreenEnabled && !document.fullscreenElement) {
+        els.stage.requestFullscreen?.().catch(() => {});
+      }
+      setDemoPresentationView();
+      window.setTimeout(resizeGlobe, 250);
+      startDemoCycle();
+      return;
+    }
+
+    stopDemoCycle();
+    state.idleSpin = state.demoPreviousIdleSpin;
+    els.toggleIdleSpin.classList.toggle("active", state.idleSpin);
+    els.toggleIdleSpin.setAttribute("aria-pressed", state.idleSpin ? "true" : "false");
+    if (!options.skipFullscreenExit && document.fullscreenElement === els.stage) {
+      document.exitFullscreen?.().catch(() => {});
+    }
+    window.setTimeout(resizeGlobe, 160);
+  }
+
+  function startDemoCycle() {
+    stopDemoCycle({ keepCallout: true });
+    showNextDemoCamera();
+    state.demoTimer = window.setInterval(showNextDemoCamera, 14500);
+    state.demoLinkTimer = window.setInterval(updateDemoLink, 180);
+  }
+
+  function stopDemoCycle(options = {}) {
+    if (state.demoTimer) clearInterval(state.demoTimer);
+    if (state.demoLinkTimer) clearInterval(state.demoLinkTimer);
+    state.demoTimer = null;
+    state.demoLinkTimer = null;
+    state.demoCamera = null;
+    state.demoResolving = false;
+    destroyDemoMedia();
+    if (!options.keepCallout) {
+      els.demoMedia.innerHTML = "";
+      els.demoStatus.textContent = "Demo stopped";
+      els.demoLink.classList.remove("visible");
+    }
+  }
+
+  async function showNextDemoCamera() {
+    if (!state.demoMode || state.demoResolving) return;
+    state.demoResolving = true;
+    els.demoStatus.textContent = "Loading vetted demo feed";
+    try {
+      if (!state.demoFeedPool.length || state.demoFeedPoolScope !== state.scope) {
+        await loadDemoFeedPool();
+      }
+
+      const demoFeeds = uniqueDemoCandidates([
+        ...(state.demoFeedPool || []).filter((entry) => isDemoPointVisible(entry.camera)),
+        ...(state.demoFeedPool || []),
+      ]);
+      if (demoFeeds.length) {
+        state.demoIndex = (state.demoIndex + 1) % demoFeeds.length;
+        const entry = demoFeeds[state.demoIndex];
+        state.demoCamera = entry.camera;
+        renderDemoFeed(entry.camera, entry.view);
+        updateDemoLink();
+        return;
+      }
+
+      if (!state.snapshot) {
+        els.demoTitle.textContent = "Waiting for public data";
+        els.demoMeta.textContent = "Demo mode will start as soon as camera data finishes loading.";
+        els.demoMedia.innerHTML = `<div class="watch-placeholder"><i data-lucide="loader-circle"></i><span>Loading dashboard data</span></div>`;
+        els.demoStatus.textContent = "Waiting for snapshot";
+        if (globalThis.lucide) globalThis.lucide.createIcons();
+        return;
+      }
+
+      const candidates = getDemoCameraCandidates();
+      if (!candidates.length) {
+        els.demoTitle.textContent = "No live video feeds available";
+        els.demoMeta.textContent = "No browser-playable live players are loaded yet.";
+        els.demoMedia.innerHTML = `<div class="watch-placeholder"><i data-lucide="cctv"></i><span>No playable public video in this view.</span></div>`;
+        els.demoStatus.textContent = "Waiting for sources";
+        if (globalThis.lucide) globalThis.lucide.createIcons();
+        return;
+      }
+
+      els.demoStatus.textContent = "Finding live player";
+      for (let attempt = 0; attempt < Math.min(candidates.length, 80); attempt += 1) {
+        state.demoIndex = (state.demoIndex + 1) % candidates.length;
+        const candidate = candidates[state.demoIndex];
+        const camera = candidate.camera || candidate;
+        try {
+          let view = candidate.view;
+          if (!view) {
+            const response = await fetch(`/api/feed-view?id=${encodeURIComponent(camera.id)}&ts=${Date.now()}`);
+            if (!response.ok) throw new Error(`Feed viewer failed with status ${response.status}`);
+            view = await response.json();
+          }
+          if (!state.demoMode) return;
+          if (!isPlayableDemoView(view)) {
+            if (view?.streamStatus === "down") markStreamDown(camera.id);
+            continue;
+          }
+          state.demoCamera = camera;
+          renderDemoFeed(camera, view);
+          updateDemoLink();
+          return;
+        } catch {
+          continue;
+        }
+      }
+      if (!state.demoMode) return;
+      els.demoTitle.textContent = "Searching for live feeds";
+      els.demoMeta.textContent = "Skipping still images, source pages, and unavailable streams.";
+      els.demoMedia.innerHTML = `<div class="watch-placeholder"><i data-lucide="loader-circle"></i><span>Checking verified live players</span></div>`;
+      els.demoStatus.textContent = "No validated stream in this pass";
+      window.setTimeout(() => state.demoMode && showNextDemoCamera(), 1800);
+      if (globalThis.lucide) globalThis.lucide.createIcons();
+    } finally {
+      state.demoResolving = false;
+    }
+  }
+
+  function getDemoCameraCandidates() {
+    const demoFeeds = (state.demoFeedPool || [])
+      .filter((entry) => entry?.camera && entry?.view)
+      .filter((entry) => !state.downStreamIds.has(entry.camera.id));
+    if (demoFeeds.length) {
+      const visibleDemoFeeds = demoFeeds.filter((entry) => isDemoPointVisible(entry.camera));
+      return uniqueDemoCandidates([...visibleDemoFeeds, ...demoFeeds]);
+    }
+
+    const cameras = (state.snapshot?.cameras || buildFallbackCameras())
+      .filter((camera) => Number.isFinite(Number(camera.lat)) && Number.isFinite(Number(camera.lng)))
+      .filter((camera) => camera.capability === "player" || (camera.capability === "stream" && camera.streamUrl))
+      .filter((camera) => !state.downStreamIds.has(camera.id));
+    const visible = cameras.filter((camera) => isDemoPointVisible(camera));
+    const ranked = uniqueById([
+      ...visible.filter(isLikelyEmbeddedPlayer),
+      ...cameras.filter(isLikelyEmbeddedPlayer),
+      ...visible,
+      ...cameras,
+    ]);
+    return ranked.length ? ranked.slice(0, 420) : [];
+  }
+
+  async function loadDemoFeedPool() {
+    if (state.demoFeedPoolScope === state.scope && state.demoFeedPool.length) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 50000);
+    try {
+      const response = await fetch(`/api/demo-feeds?scope=${encodeURIComponent(state.scope)}&ts=${Date.now()}`, { signal: controller.signal });
+      if (!response.ok) throw new Error(`Demo feeds failed with status ${response.status}`);
+      const payload = await response.json();
+      state.demoFeedPool = Array.isArray(payload.feeds) ? payload.feeds : [];
+      state.demoFeedPoolScope = state.scope;
+    } catch {
+      state.demoFeedPool = [];
+      state.demoFeedPoolScope = "";
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  function setDemoPresentationView() {
+    if (state.globeRenderer === "cesium" && cesiumGlobe.ready && globalThis.Cesium) {
+      const scope = SCOPES.find((item) => item.id === state.scope) || SCOPES[0];
+      const height = state.scope === "world" ? 17000000 : 8500000;
+      cesiumGlobe.viewer.camera.flyTo({
+        destination: globalThis.Cesium.Cartesian3.fromDegrees(scope.center[1], scope.center[0], height),
+        duration: 0.9,
+      });
+      return;
+    }
+    if (!globe.camera || !globe.controls) return;
+    globe.camera.position.copy(globe.camera.position.normalize().multiplyScalar(6.1));
+    globe.controls.target.set(0, 0, 0);
+    globe.controls.update();
+  }
+
+  function renderDemoFeed(camera, view) {
+    destroyDemoMedia();
+    const source = escapeHtml(view?.sourceLabel || camera.sourceName || "Public camera");
+    els.demoTitle.textContent = camera.name || camera.id;
+    els.demoMeta.textContent = assetSubtitle("camera", camera);
+
+    if (view?.type === "iframe") {
+      els.demoMedia.innerHTML = `<iframe src="${escapeHtml(view.url)}" title="${source}" allow="autoplay; fullscreen; encrypted-media" referrerpolicy="no-referrer-when-downgrade"></iframe>`;
+      els.demoStatus.textContent = "Embedded public player";
+    } else if (view?.type === "video" || view?.type === "hls") {
+      els.demoMedia.innerHTML = `<video id="demoVideo" autoplay muted playsinline></video>`;
+      const video = document.getElementById("demoVideo");
+      if (view.type === "hls" && globalThis.Hls && globalThis.Hls.isSupported()) {
+        state.demoHls = new globalThis.Hls({ lowLatencyMode: true });
+        state.demoHls.loadSource(view.url);
+        state.demoHls.attachMedia(video);
+        state.demoHls.on(globalThis.Hls.Events.ERROR, (_event, data) => {
+          if (data?.fatal && state.demoCamera?.id === camera.id) {
+            markStreamDown(camera.id);
+            showNextDemoCamera();
+          }
+        });
+      } else {
+        video.src = view.url;
+      }
+      video.addEventListener("error", () => {
+        markStreamDown(camera.id);
+        if (state.demoMode && state.demoCamera?.id === camera.id) showNextDemoCamera();
+      });
+      els.demoStatus.textContent = "Live public video";
+    } else {
+      els.demoStatus.textContent = "Skipped non-video source";
+      window.setTimeout(() => state.demoMode && showNextDemoCamera(), 400);
+    }
+    if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function isPlayableDemoView(view) {
+    if (!view || view.streamStatus === "down") return false;
+    if (view.type === "video" || view.type === "hls") return Boolean(view.url);
+    if (view.type !== "iframe") return false;
+    const url = String(view.url || "");
+    const sourceLabel = String(view.sourceLabel || "");
+    if (view.capability !== "player") return false;
+    if (/official public source page|source page|current image|still/i.test(sourceLabel)) return false;
+    return /youtube(?:-nocookie)?\.com\/embed|camstreamer\.com\/embed|player|live/i.test(url + " " + sourceLabel);
+  }
+
+  function isLikelyEmbeddedPlayer(camera) {
+    const text = [
+      camera.id,
+      camera.name,
+      camera.sourceName,
+      camera.sourceUrl,
+      camera.sourcePageUrl,
+      camera.officialUrl,
+      camera.url,
+      camera.capabilityLabel,
+    ].filter(Boolean).join(" ");
+    return camera.capability === "player" || /youtube|youtu\.be|camstreamer|live player|embedded player/i.test(text);
+  }
+
+  function uniqueById(items) {
+    const seen = new Set();
+    return (items || []).filter((item) => {
+      if (!item?.id || seen.has(item.id)) return false;
+      seen.add(item.id);
+      return true;
+    });
+  }
+
+  function uniqueDemoCandidates(items) {
+    const seen = new Set();
+    return (items || []).filter((entry) => {
+      const id = entry?.camera?.id || entry?.id;
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  }
+
+  function isDemoPointVisible(camera) {
+    try {
+      const point = projectLatLngToStage(Number(camera?.lat), Number(camera?.lng));
+      if (!point) return false;
+      const rect = els.stage.getBoundingClientRect();
+      return point.x > 30 && point.x < rect.width - 430 && point.y > 48 && point.y < rect.height - 60;
+    } catch {
+      return false;
+    }
+  }
+
+  function destroyDemoMedia() {
+    if (state.demoHls) {
+      state.demoHls.destroy();
+      state.demoHls = null;
+    }
+  }
+
+  function updateDemoLink() {
+    if (!state.demoMode || !state.demoCamera) return;
+    const point = projectLatLngToStage(Number(state.demoCamera.lat), Number(state.demoCamera.lng));
+    if (!point) {
+      els.demoLink.classList.remove("visible");
+      return;
+    }
+    const stageRect = els.stage.getBoundingClientRect();
+    const calloutRect = els.demoCallout.getBoundingClientRect();
+    const targetX = calloutRect.left - stageRect.left + 14;
+    const targetY = calloutRect.top - stageRect.top + calloutRect.height * 0.56;
+    els.demoLinkLine.setAttribute("x1", point.x.toFixed(1));
+    els.demoLinkLine.setAttribute("y1", point.y.toFixed(1));
+    els.demoLinkLine.setAttribute("x2", targetX.toFixed(1));
+    els.demoLinkLine.setAttribute("y2", targetY.toFixed(1));
+    els.demoLinkDot.setAttribute("cx", point.x.toFixed(1));
+    els.demoLinkDot.setAttribute("cy", point.y.toFixed(1));
+    els.demoLink.classList.add("visible");
+  }
+
+  function projectLatLngToStage(lat, lng) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    const rect = els.stage.getBoundingClientRect();
+    if (state.globeRenderer === "cesium" && cesiumGlobe.ready && globalThis.Cesium) {
+      const scene = cesiumGlobe.viewer?.scene;
+      const cartesian = globalThis.Cesium.Cartesian3.fromDegrees(lng, lat, 10000);
+      const screen = globalThis.Cesium.SceneTransforms.wgs84ToWindowCoordinates(scene, cartesian);
+      if (!screen) return null;
+      return { x: screen.x - rect.left, y: screen.y - rect.top };
+    }
+    if (!globe.camera || !globalThis.THREE) return null;
+    const vector = latLngToVector3(lat, lng, 2.08);
+    globe.worldGroup?.updateMatrixWorld?.();
+    if (globe.worldGroup) vector.applyMatrix4(globe.worldGroup.matrixWorld);
+    vector.project(globe.camera);
+    if (vector.z > 1) return null;
+    return {
+      x: (vector.x * 0.5 + 0.5) * rect.width,
+      y: (-vector.y * 0.5 + 0.5) * rect.height,
+    };
   }
 
   function primeAlertAudio() {
@@ -583,6 +1088,75 @@
     }
   }
 
+  function toggleSearchModal(open) {
+    state.searchPanelOpen = open;
+    els.searchModal.classList.toggle("open", open);
+    els.searchModal.setAttribute("aria-hidden", open ? "false" : "true");
+    if (open) {
+      renderSearchResults();
+      window.setTimeout(() => els.searchInput.focus(), 80);
+    }
+  }
+
+  function renderSearchResults() {
+    if (!els.searchResults) return;
+    const matches = getSearchMatches().slice(0, 18);
+    if (!state.query) {
+      els.searchResults.innerHTML = `<div class="empty-state">Type a place, feed, callsign, alert, or source name. Results will center on the globe without jumping down the page.</div>`;
+      return;
+    }
+    if (!matches.length) {
+      els.searchResults.innerHTML = `<div class="empty-state">No matching public signals found for "${escapeHtml(state.query)}".</div>`;
+      return;
+    }
+    els.searchResults.innerHTML = matches.map(({ type, item }) => {
+      const color = colorForType(type);
+      return `<button class="search-result" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">
+        <span class="asset-kind" style="color:${color}"><i data-lucide="${iconForType(type)}"></i></span>
+        <span><strong>${escapeHtml(item.name || item.callsign || item.title || item.id)}</strong><small>${escapeHtml(assetSubtitle(type, item))}</small></span>
+        <em>${escapeHtml(type === "demographic" ? "population" : type)}</em>
+      </button>`;
+    }).join("");
+    if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function selectSearchResult(type, item) {
+    selectObject(type, item, { focus: true, scrollToWatch: false });
+    toggleSearchModal(false);
+  }
+
+  function togglePanelCollapse(panelId) {
+    const panel = panelElement(panelId);
+    if (!panel) return;
+    const collapsed = !panel.classList.contains("collapsed");
+    panel.classList.toggle("collapsed", collapsed);
+    state.collapsedPanels[panelId] = collapsed;
+    saveCollapsedPanels();
+    updateCollapseButtons();
+  }
+
+  function panelElement(panelId) {
+    return {
+      assets: document.querySelector(".top-assets"),
+      regions: document.querySelector(".region-summary"),
+      alerts: document.querySelector(".alert-summary"),
+    }[panelId] || null;
+  }
+
+  function applyCollapsedPanels() {
+    for (const [panelId, collapsed] of Object.entries(state.collapsedPanels || {})) {
+      panelElement(panelId)?.classList.toggle("collapsed", Boolean(collapsed));
+    }
+    updateCollapseButtons();
+  }
+
+  function updateCollapseButtons() {
+    document.querySelectorAll("[data-collapse-panel]").forEach((button) => {
+      const panel = panelElement(button.dataset.collapsePanel);
+      button.textContent = panel?.classList.contains("collapsed") ? "Expand" : "Collapse";
+    });
+  }
+
   function initClock() {
     const now = new Date();
     els.clockUtc.textContent = `${now.toISOString().slice(11, 16)} UTC`;
@@ -593,11 +1167,14 @@
 
   function updateSystemStatusAge(options = {}) {
     if (!state.snapshot?.generatedAt || (!options.force && els.systemStatusLabel.textContent === "Syncing")) return;
-    const sources = state.snapshot.sourceHealth || [];
-    const responding = sources.filter((source) => source.ok).length;
-    const total = sources.length || responding;
-    els.systemStatusLabel.textContent = total && responding < total ? "Partial Data" : "Data Online";
-    els.systemStatusSub.textContent = `${responding}/${total || 0} sources | updated ${formatTimeAgo(state.snapshot.generatedAt)}`;
+    const health = sourceHealthCounts(state.snapshot.sourceHealth || []);
+    const staleText = health.stale ? ` | ${health.stale} stale cache${health.stale === 1 ? "" : "s"}` : "";
+    els.systemStatusLabel.textContent = health.total && health.responding < health.total
+      ? "Partial Data"
+      : health.stale
+        ? "Cached Data"
+        : "Core Data Online";
+    els.systemStatusSub.textContent = `${health.responding}/${health.total || 0} core sources${staleText} | updated ${formatTimeAgo(state.snapshot.generatedAt)}`;
   }
 
   function updateSnapshotAgeLabels() {
@@ -648,6 +1225,7 @@
     renderCharts();
     renderAssets();
     renderTimeline();
+    renderSearchResults();
     renderCatalog();
     renderCameraMap();
     renderGlobeLayers();
@@ -687,9 +1265,23 @@
   function subtitleForScope() {
     const snapshot = state.snapshot;
     if (!snapshot) return "Free public intelligence layers fused into one global operating picture.";
-    const sources = snapshot.sourceHealth.filter((source) => source.ok).length;
-    const total = snapshot.sourceHealth.length;
-    return `${labelForScope(state.scope)} scope | auto-refresh 60s | ${sources}/${total} public adapters responding | ${formatTimeAgo(snapshot.generatedAt)}`;
+    const health = sourceHealthCounts(snapshot.sourceHealth || []);
+    const optionalDown = health.optionalTotal - health.optionalResponding;
+    const optionalText = optionalDown > 0 ? ` | ${optionalDown} optional delayed` : "";
+    const staleText = health.stale ? ` | ${health.stale} stale cache${health.stale === 1 ? "" : "s"}` : "";
+    return `${labelForScope(state.scope)} scope | auto-refresh 60s | ${health.responding}/${health.total} core adapters responding${optionalText}${staleText} | ${formatTimeAgo(snapshot.generatedAt)}`;
+  }
+
+  function sourceHealthCounts(sources) {
+    const core = sources.filter((source) => !source.optional);
+    const optional = sources.filter((source) => source.optional);
+    return {
+      responding: core.filter((source) => source.ok).length,
+      total: core.length || sources.length,
+      optionalResponding: optional.filter((source) => source.ok).length,
+      optionalTotal: optional.length,
+      stale: sources.filter((source) => source.stale).length,
+    };
   }
 
   function renderMetrics() {
@@ -711,7 +1303,7 @@
   function renderEvents() {
     const allEvents = getFilteredEvents();
     const events = allEvents.slice(0, 5);
-    const alertEvents = allEvents.filter((event) => event.type === "alert").slice(0, 10);
+    const alertEvents = getDisplayAlerts().slice(0, 30);
     els.alertDrawerCount.textContent = String(alertEvents.length || state.snapshot?.alerts?.length || 0);
     els.alertDrawerList.innerHTML = alertEvents.length
       ? alertEvents.map(renderEventCard).join("")
@@ -722,13 +1314,35 @@
     }
   }
 
+  function getDisplayAlerts() {
+    const alerts = [...(state.snapshot?.alerts || [])].sort((left, right) => {
+      const leftTier = alertDisplayTier(left);
+      const rightTier = alertDisplayTier(right);
+      if (leftTier !== rightTier) return leftTier - rightTier;
+      return (Date.parse(right.time || "") || 0) - (Date.parse(left.time || "") || 0);
+    });
+    const actionable = alerts.filter((alert) => alertDisplayTier(alert) < 2);
+    return actionable.length ? actionable : alerts;
+  }
+
+  function isReferenceAlert(alert = {}) {
+    return /reference/i.test(`${alert.event || ""} ${alert.severity || ""}`) || /reference monitor/i.test(alert.id || "");
+  }
+
+  function alertDisplayTier(alert = {}) {
+    const text = `${alert.event || ""} ${alert.title || ""} ${alert.severity || ""} ${alert.source || ""}`;
+    if (/test message/i.test(text) || isReferenceAlert(alert)) return 2;
+    if (/open reporting|open source|gdelt/i.test(text)) return 1;
+    return 0;
+  }
+
   function renderEventCard(event) {
     const icon = iconForType(event.type);
     const color = colorForType(event.type);
     const subtitle = event.type === "alert"
       ? `${event.event || "Weather alert"} | ${event.areaSummary || event.region || "NWS"}`
       : event.region || event.location || event.source || "Public signal";
-    return `<button class="event-card" type="button" data-select-type="${event.type}" data-select-id="${event.id}">
+    return `<button class="event-card" type="button" data-select-type="${event.type}" data-select-id="${event.id}" ${event.type === "alert" ? 'data-focus="true" data-pulse="true"' : ""}>
       <span class="event-icon" style="color:${color}"><i data-lucide="${icon}"></i></span>
       <span><h3>${escapeHtml(event.title)}</h3><p>${escapeHtml(subtitle)}</p></span>
       <span class="event-chip" style="color:${color}">${escapeHtml(event.severity || event.type)}</span>
@@ -762,6 +1376,7 @@
       snapshot.flights.length,
       snapshot.quakes.length,
       snapshot.fires?.length || 0,
+      snapshot.demographics?.length || 0,
       snapshot.alerts.length,
     ];
     const total = values.reduce((sum, value) => sum + value, 0);
@@ -906,6 +1521,19 @@
     localStorage.setItem("oversee:pinned-assets", JSON.stringify(state.pinnedAssets));
   }
 
+  function loadCollapsedPanels() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem("oversee:collapsed-panels") || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveCollapsedPanels() {
+    localStorage.setItem("oversee:collapsed-panels", JSON.stringify(state.collapsedPanels || {}));
+  }
+
   function renderCatalog() {
     const allMatches = getFilteredCameras();
     const mapMatches = getMapCameras();
@@ -929,6 +1557,9 @@
           : `${formatNumber(mapMatches.length)} cameras on map | ${formatNumber(allMatches.length)} ${filterLabel} highlighted/listed | ${formatNumber(loadedCount)} loaded`;
     if (hiddenStreamCount && !state.includeDownStreams) {
       els.cameraMapMeta.textContent += ` | ${formatNumber(hiddenStreamCount)} unverified/down hidden`;
+    }
+    if (!state.showCameraMapMarkers) {
+      els.cameraMapMeta.textContent += " | camera dots hidden";
     }
 
     if (!cameras.length) {
@@ -1008,7 +1639,13 @@
         button.classList.toggle("active", button.dataset.globeRenderer === state.globeRenderer);
       });
     }
-    if (useCesium) window.setTimeout(() => cesiumGlobe.viewer?.resize?.(), 50);
+    if (useCesium) {
+      window.setTimeout(() => {
+        cesiumGlobe.viewer?.resize?.();
+        renderCesiumLayers({ retry: true });
+        cesiumGlobe.viewer?.scene?.requestRender?.();
+      }, 80);
+    }
   }
 
   function cycleSensorMode() {
@@ -1200,7 +1837,14 @@
 
   async function updateCesiumBaseLayer() {
     const viewer = cesiumGlobe.viewer;
-    if (!viewer || !globalThis.Cesium) return;
+    if (!viewer || !globalThis.Cesium) {
+      if (state.globeWeatherOverlay) {
+        state.globeWeatherOverlay = false;
+        els.toggleGlobeWeather.classList.remove("active");
+        els.toggleGlobeWeather.setAttribute("aria-pressed", "false");
+      }
+      return;
+    }
     const provider = await makeCesiumImageryProvider();
     if (!provider) return;
     if (cesiumGlobe.baseLayer) {
@@ -1245,6 +1889,7 @@
     if (state.globeWeatherOverlay && state.globeRenderer !== "cesium") {
       setGlobeRenderer("cesium");
     }
+    await ensureCesiumGlobeReady();
     await updateCesiumWeatherLayer();
   }
 
@@ -1253,7 +1898,14 @@
     els.toggleGlobeWeather.setAttribute("aria-pressed", state.globeWeatherOverlay ? "true" : "false");
 
     const viewer = cesiumGlobe.viewer;
-    if (!viewer || !globalThis.Cesium) return;
+    if (!viewer || !globalThis.Cesium) {
+      if (state.globeFloodOverlay) {
+        state.globeFloodOverlay = false;
+        els.toggleGlobeFlood.classList.remove("active");
+        els.toggleGlobeFlood.setAttribute("aria-pressed", "false");
+      }
+      return;
+    }
 
     if (!state.globeWeatherOverlay) {
       if (cesiumGlobe.weatherLayer) {
@@ -1281,6 +1933,7 @@
     if (state.globeFloodOverlay && state.globeRenderer !== "cesium") {
       setGlobeRenderer("cesium");
     }
+    await ensureCesiumGlobeReady();
     await updateCesiumFloodLayer();
   }
 
@@ -1310,6 +1963,15 @@
     cesiumGlobe.floodLayer = viewer.imageryLayers.addImageryProvider(provider);
     cesiumGlobe.floodLayer.alpha = 0.72;
     cesiumGlobe.floodLayer.brightness = 1.05;
+  }
+
+  async function ensureCesiumGlobeReady() {
+    if (cesiumGlobe.ready || state.globeRenderer !== "cesium") return;
+    if (!cesiumGlobe.loading) initCesiumGlobe();
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      if (cesiumGlobe.ready || cesiumGlobe.failed) return;
+      await sleep(75);
+    }
   }
 
   function applyEarthView() {
@@ -1394,11 +2056,16 @@
     if (state.layers.quakes) addMarkers("quakes", filterByQuery(snapshot.quakes), "quake");
     if (state.layers.fires) addMarkers("fires", filterByQuery(snapshot.fires || []), "fire");
     if (state.layers.alerts) addMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
+    if (state.layers.demographics) addMarkers("demographics", filterByQuery(snapshot.demographics || []), "demographic");
     renderSelectedGlobeFocus();
   }
 
-  function renderCesiumLayers() {
+  function renderCesiumLayers(options = {}) {
     if (!cesiumGlobe.ready || !state.snapshot || !globalThis.Cesium) return;
+    if (cesiumGlobe.renderRetry) {
+      clearTimeout(cesiumGlobe.renderRetry);
+      cesiumGlobe.renderRetry = null;
+    }
     Object.values(cesiumGlobe.sources).forEach((source) => source.entities.removeAll());
     const snapshot = state.snapshot;
     if (state.layers.cameras) addCesiumMarkers("cameras", getMapCameras(), "camera");
@@ -1407,14 +2074,20 @@
     if (state.layers.quakes) addCesiumMarkers("quakes", filterByQuery(snapshot.quakes), "quake");
     if (state.layers.fires) addCesiumMarkers("fires", filterByQuery(snapshot.fires || []), "fire");
     if (state.layers.alerts) addCesiumMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
+    if (state.layers.demographics) addCesiumMarkers("demographics", filterByQuery(snapshot.demographics || []), "demographic");
     renderCesiumSelection();
+    cesiumGlobe.viewer?.scene?.requestRender?.();
+    const cameraSource = cesiumGlobe.sources.cameras;
+    if (state.layers.cameras && getMapCameras().length && cameraSource && !cameraSource.entities.values.length && !options.retry) {
+      cesiumGlobe.renderRetry = window.setTimeout(() => renderCesiumLayers({ retry: true }), 350);
+    }
   }
 
   function addCesiumMarkers(layerId, items, type) {
     const source = cesiumGlobe.sources[layerId];
     if (!source || !globalThis.Cesium) return;
     const Cesium = globalThis.Cesium;
-    const max = type === "camera" ? 1400 : type === "satellite" ? 900 : type === "flight" ? 1200 : type === "quake" ? 700 : type === "fire" ? 1200 : 260;
+    const max = type === "camera" ? 2800 : type === "satellite" ? 900 : type === "flight" ? 1200 : type === "quake" ? 700 : type === "fire" ? 1200 : type === "demographic" ? 80 : 260;
     const visible = sampleItems(items, max);
     for (const item of visible) {
       const lat = Number(item.lat);
@@ -1540,6 +2213,20 @@
         });
       }
     }
+    if (type === "demographic") {
+      const radiusKm = clamp(Number(item.radiusKm || 140), 45, 480);
+      cesiumGlobe.selectionSource.entities.add({
+        ellipse: {
+          semiMajorAxis: radiusKm * 1000,
+          semiMinorAxis: radiusKm * 1000,
+          material: cesiumColor(COLORS.demographics, 0.16),
+          outline: true,
+          outlineColor: cesiumColor(COLORS.demographics, 0.88),
+          height: 7000,
+        },
+        position: Cesium.Cartesian3.fromDegrees(lng, lat, 8000),
+      });
+    }
   }
 
   function cesiumPositions(points, height = 0) {
@@ -1560,6 +2247,7 @@
     if (type === "quake") return 16000;
     if (type === "fire") return 30000;
     if (type === "alert") return 24000;
+    if (type === "demographic") return 22000;
     return 9000;
   }
 
@@ -1569,24 +2257,27 @@
     if (type === "flight") return 8;
     if (type === "alert") return 10;
     if (type === "fire") return 8 + clamp(Number(item.frp || 0) / 40, 0, 10);
+    if (type === "demographic") return 7 + clamp(Math.sqrt(Number(item.population || 0)) / 1600, 2, 14);
     return 6;
   }
 
   function addMarkers(layerId, items, type) {
     const group = globe.groups[layerId];
-    const max = type === "satellite" ? 700 : type === "flight" ? 620 : type === "quake" ? 420 : type === "fire" ? 720 : 260;
+    const max = type === "satellite" ? 700 : type === "flight" ? 620 : type === "quake" ? 420 : type === "fire" ? 720 : type === "demographic" ? 80 : 260;
     const visible = sampleItems(items, max);
     for (const item of visible) {
       const color = item.displayColor || COLORS[layerId] || colorForType(type);
       const lat = Number(item.lat);
       const lng = Number(item.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      const altitude = type === "satellite" ? clamp((item.altitudeKm || 550) / 18000, 0.035, 0.62) : type === "flight" ? 0.045 : 0.018;
+      const altitude = type === "satellite" ? clamp((item.altitudeKm || 550) / 18000, 0.035, 0.62) : type === "flight" ? 0.045 : type === "demographic" ? 0.024 : 0.018;
       const size = type === "quake"
         ? 0.028 + clamp((item.magnitude || 1) / 80, 0, 0.06)
         : type === "fire"
           ? 0.034 + clamp((item.frp || 1) / 1800, 0, 0.045)
-          : type === "satellite" ? 0.038 : 0.052;
+          : type === "demographic"
+            ? 0.034 + clamp(Math.sqrt(Number(item.population || 0)) / 85000, 0, 0.065)
+            : type === "satellite" ? 0.038 : 0.052;
       const sprite = makeSprite(color, size);
       sprite.position.copy(latLngToVector3(lat, lng, 2.02 + altitude));
       sprite.userData = { type, item, baseScale: size, phase: Math.random() * Math.PI * 2 };
@@ -1636,7 +2327,7 @@
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
 
     const color = type === "alert" ? COLORS.alerts : colorForType(type);
-    if (type === "alert" || ((type === "fire" || type === "quake") && Array.isArray(item.geometryRings) && item.geometryRings.length)) {
+    if (type === "alert" || type === "demographic" || ((type === "fire" || type === "quake") && Array.isArray(item.geometryRings) && item.geometryRings.length)) {
       const rings = Array.isArray(item.geometryRings) ? item.geometryRings : [];
       if (rings.length) {
         for (const ring of rings) {
@@ -1644,7 +2335,7 @@
           globe.selectionGroup.add(makePathLine(ring, "#ffffff", 2.081, 0.2));
         }
       } else {
-        const radiusKm = clamp(Number(item.radiusKm || 220), 80, 900);
+        const radiusKm = type === "demographic" ? clamp(Number(item.radiusKm || 140), 45, 480) : clamp(Number(item.radiusKm || 220), 80, 900);
         globe.selectionGroup.add(makePathLine(makeGeoCircle(lat, lng, radiusKm), color, 2.075, 0.86));
         globe.selectionGroup.add(makePathLine(makeGeoCircle(lat, lng, radiusKm * 0.62), color, 2.082, 0.34));
       }
@@ -1652,7 +2343,7 @@
       const sprite = makeSprite(color, 0.16);
       sprite.position.copy(latLngToVector3(lat, lng, 2.2));
       globe.selectionGroup.add(sprite);
-      if (type === "alert") return;
+      if (type === "alert" || type === "demographic") return;
     }
 
     if (type === "flight" && Number.isFinite(Number(item.heading))) {
@@ -1895,9 +2586,10 @@
     if (!globalThis.L || !els.cameraMap) return;
     state.cameraRenderer = globalThis.L.canvas({ padding: 0.5 });
     state.cameraMap = globalThis.L.map(els.cameraMap, { zoomControl: true, minZoom: 2, renderer: state.cameraRenderer }).setView([20, 0], 2);
-    globalThis.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    globalThis.L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png", {
       maxZoom: 19,
-      attribution: "&copy; OpenStreetMap contributors",
+      subdomains: "abcd",
+      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
     }).addTo(state.cameraMap);
     state.cameraLayer = globalThis.L.layerGroup().addTo(state.cameraMap);
     state.cameraMap.on("moveend zoomend", () => {
@@ -1977,9 +2669,15 @@
     state.cameraLayer.clearLayers();
     const cameras = getMapCameras();
     const highlighted = new Set(getFilteredCameras().map((camera) => camera.id));
+    const markerCameras = state.showCameraMapMarkers ? getCameraMapMarkerSet(cameras, highlighted) : [];
     const bounds = [];
 
     cameras.forEach((camera) => {
+      if (!Number.isFinite(camera.lat) || !Number.isFinite(camera.lng)) return;
+      bounds.push([camera.lat, camera.lng]);
+    });
+
+    markerCameras.forEach((camera) => {
       if (!Number.isFinite(camera.lat) || !Number.isFinite(camera.lng)) return;
       const isHighlighted = state.cameraFilter === "all" || highlighted.has(camera.id);
       const color = isHighlighted ? colorForCamera(camera) : "rgba(90, 121, 140, 0.62)";
@@ -1998,7 +2696,6 @@
         selectObject("camera", camera, { focus: false });
       });
       marker.addTo(state.cameraLayer);
-      bounds.push([camera.lat, camera.lng]);
     });
 
     if (bounds.length && (options.fit || !state.hasFitCameraMap)) {
@@ -2012,10 +2709,29 @@
     }
   }
 
+  function getCameraMapMarkerSet(cameras, highlighted) {
+    const zoom = state.cameraMap?.getZoom?.() || 2;
+    const maxMarkers = zoom <= 3 ? 4200 : zoom <= 5 ? 7000 : 10000;
+    if (!cameras || cameras.length <= maxMarkers) return cameras || [];
+    const selectedId = state.selection?.type === "camera" ? state.selection.id : "";
+    const priority = [];
+    const priorityIds = new Set();
+    const priorityLimit = Math.floor(maxMarkers * 0.45);
+    for (const camera of cameras) {
+      if (camera.id === selectedId || highlighted.has(camera.id) || camera.capability === "player" || camera.capability === "stream") {
+        priority.push(camera);
+        priorityIds.add(camera.id);
+      }
+      if (priority.length >= priorityLimit) break;
+    }
+    const remaining = cameras.filter((camera) => !priorityIds.has(camera.id));
+    return [...priority, ...sampleItems(remaining, Math.max(0, maxMarkers - priority.length))];
+  }
+
   async function selectObject(type, item, options = {}) {
     state.selection = { type, id: item.id, item };
     renderSelectedGlobeFocus(type, item);
-    if (!options.silent) focusGlobeOnItem(item, { pulse: type === "alert" });
+    if (!options.silent && options.focus) focusGlobeOnItem(item, { pulse: type === "alert" || options.pulse });
     if (type === "alert" && !options.silent) {
       document.getElementById("map")?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
@@ -2037,7 +2753,7 @@
       if (state.selection?.id === item.id) renderWatch(type, item);
     }
 
-    if (options.focus) {
+    if (options.scrollToWatch) {
       document.querySelector(".watch-panel")?.scrollIntoView({ behavior: "smooth", block: "center" });
     }
   }
@@ -2045,13 +2761,18 @@
   function renderSelectionCard(type, item) {
     const color = colorForType(type);
     const pinned = isPinned(type, item.id);
+    const primaryAction = type === "camera"
+      ? `<button class="text-button" style="color:${color}" type="button" data-select-type="camera" data-select-id="${escapeHtml(item.id)}" data-scroll-watch="true">Watch Feed</button>`
+      : `<button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-scroll-watch="true">View Details</button>`;
+    const focusAction = `<button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true" data-pulse="true">${type === "alert" ? "Pinpoint Alert" : "Pinpoint"}</button>`;
     els.selectionCard.innerHTML = `<button class="selection-close" type="button" data-close-selection aria-label="Close selection card">
         <i data-lucide="x"></i>
       </button>
       <h3>${escapeHtml(item.name || item.callsign || item.title || item.id)}</h3>
       <p>${escapeHtml(assetSubtitle(type, item))}</p>
       <div class="selection-actions">
-        <button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">${type === "alert" ? "Focus Alert" : "Open In Watch Pane"}</button>
+        ${primaryAction}
+        ${focusAction}
         <button class="text-button" style="color:${pinned ? "var(--green)" : color}" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">
           <i data-lucide="${pinned ? "bookmark-check" : "bookmark"}"></i>${pinned ? "Pinned" : "Pin"}
         </button>
@@ -2332,6 +3053,7 @@
     if (type === "flight") return snapshot.flights.find((item) => item.id === id);
     if (type === "quake") return snapshot.quakes.find((item) => item.id === id);
     if (type === "fire") return (snapshot.fires || []).find((item) => item.id === id);
+    if (type === "demographic") return (snapshot.demographics || []).find((item) => item.id === id);
     if (type === "alert") return snapshot.alerts.find((item) => item.id === id);
     return null;
   }
@@ -2430,20 +3152,38 @@
     if (state.layers.quakes) assets.push(...snapshot.quakes.map((item) => ({ type: "quake", item })));
     if (state.layers.fires) assets.push(...(snapshot.fires || []).map((item) => ({ type: "fire", item })));
     if (state.layers.alerts) assets.push(...snapshot.alerts.map((item) => ({ type: "alert", item })));
+    if (state.layers.demographics) assets.push(...(snapshot.demographics || []).map((item) => ({ type: "demographic", item })));
     if (state.layers.cameras) assets.push(...getFilteredCameras().slice(0, 16).map((item) => ({ type: "camera", item })));
     return filterAssetsByQuery(assets);
   }
 
   function getSearchMatches() {
     const snapshot = state.snapshot || buildFallbackSnapshot();
-    return filterAssetsByQuery([
+    const matches = filterAssetsByQuery([
       ...snapshot.cameras.map((item) => ({ type: "camera", item })),
       ...snapshot.satellites.map((item) => ({ type: "satellite", item })),
       ...snapshot.flights.map((item) => ({ type: "flight", item })),
       ...snapshot.quakes.map((item) => ({ type: "quake", item })),
       ...(snapshot.fires || []).map((item) => ({ type: "fire", item })),
+      ...(snapshot.demographics || []).map((item) => ({ type: "demographic", item })),
       ...snapshot.alerts.map((item) => ({ type: "alert", item })),
     ]);
+    if (!state.query) return matches;
+    return matches.sort((left, right) => searchRank(left) - searchRank(right));
+  }
+
+  function searchRank(entry) {
+    const item = entry.item || {};
+    const query = state.query;
+    const exactFields = [item.country, item.region, item.area, item.name, item.title, item.callsign, item.id]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase());
+    if (exactFields.some((value) => value === query)) return 0;
+    if (exactFields.some((value) => value.startsWith(query))) return 1;
+    if (entry.type === "camera") return 2;
+    if (entry.type === "alert") return 3;
+    if (entry.type === "demographic") return 4;
+    return 5;
   }
 
   function filterAssetsByQuery(assets) {
@@ -2477,6 +3217,8 @@
       item.gacc,
       item.county,
       item.state,
+      item.populationLabel,
+      item.dataset,
     ]
       .concat(Array.isArray(item.tags) ? item.tags : [])
       .filter(Boolean)
@@ -2494,6 +3236,7 @@
       flights: [],
       quakes: [],
       fires: [],
+      demographics: [],
       alerts: [],
       traffic: [],
       events: cameras.slice(0, 6).map((camera) => ({
@@ -2507,7 +3250,7 @@
       regions: buildRegions(cameras),
       sourceHealth: [{ name: "Local catalog", ok: true }, { name: "Live adapters", ok: false, message: error?.message || "Offline" }],
       severity: { critical: 0, high: 0, medium: 0, low: cameras.length },
-      metrics: { eventsToday: cameras.length, alerts: 0, assets: cameras.length, cameraFeeds: cameras.length, videoFeeds: cameras.filter((camera) => camera.capability === "player").length, streams: 1 },
+      metrics: { eventsToday: cameras.length, alerts: 0, assets: cameras.length, cameraFeeds: cameras.length, videoFeeds: cameras.filter((camera) => camera.capability === "player").length, streams: 1, demographics: 0 },
     };
   }
 
@@ -2710,7 +3453,17 @@
         ["Certainty", item.certainty || "unknown"],
         ["Sent", formatShortTime(item.time)],
         ["Expires", item.expires ? formatShortTime(item.expires) : "unknown"],
-        ["Source", "NWS"],
+        ["Source", item.source || "NWS"],
+      ];
+    }
+    if (type === "demographic") {
+      return [
+        ["Population", item.populationLabel || formatNumber(item.population || 0)],
+        ["Dataset", item.dataset || "ACS total population"],
+        ["Area", item.name || item.area || "unknown"],
+        ["Scope", item.region || "United States"],
+        ["Position", formatLatLng(item.lat, item.lng)],
+        ["Source", item.source || "U.S. Census"],
       ];
     }
     return [["Type", type], ["ID", item.id || "unknown"], ["Source", item.source || "public"]];
@@ -2724,6 +3477,7 @@
     if (type === "fire" && (item.subtype === "incident" || item.subtype === "perimeter")) return `${item.subtype === "perimeter" ? "Perimeter" : "Incident"} | ${item.acres ? `${formatNumber(Math.round(item.acres))} acres` : item.gacc || "WildFireSA"} | ${item.source || "EGP"}`;
     if (type === "fire") return `${item.instrument || "VIIRS"} | FRP ${Math.round(item.frp || 0)} | ${item.confidence || "unknown"} confidence`;
     if (type === "alert") return `${item.event || "Alert"} | ${item.areaSummary || item.region || item.area || "NWS"}`;
+    if (type === "demographic") return `${item.populationLabel || formatNumber(item.population || 0)} people | ${item.source || "U.S. Census ACS"}`;
     return item.source || "Public signal";
   }
 
@@ -2734,7 +3488,10 @@
     if (type === "fire" && item.subtype === "perimeter") return `Current interagency perimeter from WFIGS. ${item.acres ? `${formatNumber(Math.round(item.acres))} mapped acres.` : "Mapped perimeter available."}`;
     if (type === "fire" && item.subtype === "incident") return `Active incident from EGP WildFireSA. ${item.acres ? `${formatNumber(Math.round(item.acres))} reported acres.` : "Incident details available."}`;
     if (type === "fire") return `NASA FIRMS ${item.instrument || "VIIRS"} hotspot. FRP ${Math.round(item.frp || 0)}, confidence ${item.confidence || "unknown"}.`;
-    if (type === "alert") return "Official public weather alert from the National Weather Service.";
+    if (type === "alert") return item.source === "NWS" || !item.source
+      ? "Official public weather alert from the National Weather Service."
+      : `${item.source} public monitoring signal. Treat reference/media items as context, not official confirmation.`;
+    if (type === "demographic") return `State-level population context from ${item.source || "U.S. Census ACS"}. Useful for reading hazards near people, not as an incident feed.`;
     return assetSubtitle(type, item);
   }
 
@@ -2746,6 +3503,7 @@
       quake: "activity",
       fire: "flame",
       alert: "bell-ring",
+      demographic: "users",
       traffic: "route",
     }[type] || "circle";
   }
@@ -2758,6 +3516,7 @@
       quake: COLORS.quakes,
       fire: COLORS.fires,
       alert: COLORS.alerts,
+      demographic: COLORS.demographics,
       traffic: COLORS.traffic,
     }[type] || COLORS.cameras;
   }
@@ -2792,6 +3551,10 @@
     if (!items || items.length <= max) return items || [];
     const step = items.length / max;
     return Array.from({ length: max }, (_, index) => items[Math.floor(index * step)]).filter(Boolean);
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
   function destinationPoint(lat, lng, bearing, distanceKm) {

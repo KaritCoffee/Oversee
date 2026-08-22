@@ -1,5 +1,6 @@
 use std::{
-  net::{SocketAddr, TcpStream},
+  fs::{File, OpenOptions},
+  net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
   path::PathBuf,
   process::{Child, Command, Stdio},
   sync::Mutex,
@@ -9,17 +10,14 @@ use std::{
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
-const OVERSEE_PORT: u16 = 4173;
-const OVERSEE_URL: &str = "http://127.0.0.1:4173";
-
 struct ServerProcess(Mutex<Option<Child>>);
 
 fn main() {
   tauri::Builder::default()
     .setup(|app| {
-      start_oversee_server(app)?;
+      let oversee_url = start_oversee_server(app)?;
 
-      WebviewWindowBuilder::new(app, "main", WebviewUrl::External(OVERSEE_URL.parse()?))
+      WebviewWindowBuilder::new(app, "main", WebviewUrl::External(oversee_url.parse()?))
         .title("Oversee")
         .inner_size(1440.0, 960.0)
         .min_inner_size(1100.0, 760.0)
@@ -43,24 +41,30 @@ fn main() {
     .expect("error while running Oversee");
 }
 
-fn start_oversee_server(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn start_oversee_server(app: &tauri::App) -> Result<String, Box<dyn std::error::Error>> {
   app.manage(ServerProcess(Mutex::new(None)));
-
-  if server_is_running() {
-    return Ok(());
-  }
+  let port = reserve_local_port()?;
 
   let root = app_root(app);
-  let server_js = root.join("server.js");
   let node = node_runtime_path(app).unwrap_or_else(|| PathBuf::from("node"));
-  let child = Command::new(node)
-    .arg(server_js)
-    .current_dir(root)
-    .env("PORT", OVERSEE_PORT.to_string())
+  let (stdout_log, stderr_log) = server_log_files(app);
+  let mut command = Command::new(node);
+  command
+    .arg("server.js")
+    .current_dir(&root)
+    .env("PORT", port.to_string())
     .stdin(Stdio::null())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn()?;
+    .stdout(stdout_log.map(Stdio::from).unwrap_or_else(|_| Stdio::null()))
+    .stderr(stderr_log.map(Stdio::from).unwrap_or_else(|_| Stdio::null()));
+
+  #[cfg(windows)]
+  {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    command.creation_flags(CREATE_NO_WINDOW);
+  }
+
+  let child = command.spawn()?;
 
   if let Some(server) = app.try_state::<ServerProcess>() {
     if let Ok(mut process) = server.0.lock() {
@@ -68,8 +72,8 @@ fn start_oversee_server(app: &tauri::App) -> Result<(), Box<dyn std::error::Erro
     }
   }
 
-  wait_for_server();
-  Ok(())
+  wait_for_server(port)?;
+  Ok(format!("http://127.0.0.1:{port}"))
 }
 
 fn app_root(app: &tauri::App) -> PathBuf {
@@ -79,35 +83,82 @@ fn app_root(app: &tauri::App) -> PathBuf {
       .expect("project root")
       .to_path_buf()
   } else {
-    app
-      .path()
-      .resource_dir()
-      .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default())
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+    let exe_dir = std::env::current_exe()
+      .ok()
+      .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
+      .unwrap_or_default();
+    let candidates = [
+      resource_dir.clone(),
+      resource_dir.join("_up_"),
+      resource_dir.join("resources"),
+      exe_dir.clone(),
+      exe_dir.join("_up_"),
+      exe_dir.join("resources"),
+    ];
+
+    candidates
+      .into_iter()
+      .find(|path| path.join("server.js").exists())
+      .unwrap_or(resource_dir)
   }
 }
 
 fn node_runtime_path(app: &tauri::App) -> Option<PathBuf> {
   let resource_dir = app.path().resource_dir().ok()?;
+  let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
   let candidates = [
     resource_dir.join("node.exe"),
     resource_dir.join("node"),
     resource_dir.join("resources").join("node.exe"),
     resource_dir.join("resources").join("node"),
+    resource_dir.join("_up_").join("resources").join("node.exe"),
+    resource_dir.join("_up_").join("resources").join("node"),
+    exe_dir.join("node.exe"),
+    exe_dir.join("node"),
+    exe_dir.join("resources").join("node.exe"),
+    exe_dir.join("resources").join("node"),
+    exe_dir.join("_up_").join("resources").join("node.exe"),
+    exe_dir.join("_up_").join("resources").join("node"),
   ];
 
   candidates.into_iter().find(|path| path.exists())
 }
 
-fn server_is_running() -> bool {
-  let address = SocketAddr::from(([127, 0, 0, 1], OVERSEE_PORT));
+fn server_log_files(app: &tauri::App) -> (std::io::Result<File>, std::io::Result<File>) {
+  let log_dir = app
+    .path()
+    .app_log_dir()
+    .unwrap_or_else(|_| std::env::temp_dir().join("Oversee"));
+  let _ = std::fs::create_dir_all(&log_dir);
+  (
+    open_log_file(log_dir.join("oversee-server.out.log")),
+    open_log_file(log_dir.join("oversee-server.err.log")),
+  )
+}
+
+fn open_log_file(path: PathBuf) -> std::io::Result<File> {
+  OpenOptions::new().create(true).append(true).open(path)
+}
+
+fn reserve_local_port() -> Result<u16, Box<dyn std::error::Error>> {
+  let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))?;
+  let port = listener.local_addr()?.port();
+  drop(listener);
+  Ok(port)
+}
+
+fn server_is_running(port: u16) -> bool {
+  let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
   TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
 }
 
-fn wait_for_server() {
-  for _ in 0..24 {
-    if server_is_running() {
-      return;
+fn wait_for_server(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+  for _ in 0..120 {
+    if server_is_running(port) {
+      return Ok(());
     }
     thread::sleep(Duration::from_millis(125));
   }
+  Err(format!("Oversee local server did not start on port {port}").into())
 }

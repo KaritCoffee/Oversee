@@ -1,6 +1,6 @@
 [package]
 name = "oversee"
-version = "0.1.6"
+version = "2.1.0"
 description = "Oversee public geospatial dashboard"
 authors = ["Oversee"]
 edition = "2021"

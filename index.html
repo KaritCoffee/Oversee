@@ -66,12 +66,11 @@
             </div>
           </section>
 
-          <label class="global-search">
-            <i data-lucide="search"></i>
-            <input id="searchInput" type="search" placeholder="Search: London, Iowa, Atlanta, Toronto, Ireland, I-5, callsign, satellite..." />
-          </label>
-
           <section class="topbar-tools" aria-label="Console tools">
+            <button class="search-launch-button" type="button" id="openSearchPanel" title="Search locations, feeds, and signals">
+              <i data-lucide="search"></i>
+              <span>Search</span>
+            </button>
             <button class="icon-button" type="button" id="cycleSensorMode" title="Cycle sensor mode">
               <i data-lucide="scan-eye"></i>
             </button>
@@ -81,8 +80,11 @@
             <button class="icon-button orbit-toggle" type="button" id="toggleIdleSpin" title="Toggle slow globe rotation" aria-pressed="false">
               <i data-lucide="rotate-3d"></i>
             </button>
-            <button class="icon-button" type="button" id="openSourcePanel" title="Source status">
-              <i data-lucide="radio-tower"></i>
+            <button class="icon-button demo-toggle" type="button" id="toggleDemoMode" title="Demo mode" aria-pressed="false">
+              <i data-lucide="presentation"></i>
+            </button>
+            <button class="icon-button" type="button" id="openSettingsPanel" title="API key settings">
+              <i data-lucide="settings"></i>
             </button>
             <div class="clock-block">
               <strong id="clockUtc">--:-- UTC</strong>
@@ -126,8 +128,28 @@
                 <i data-lucide="waves"></i>
                 <span>FEMA Flood</span>
               </button>
+              <div class="stage-jump-bar" aria-label="Quick navigation">
+                <button class="text-button" type="button" data-view-jump="camera-browser">Watch feeds</button>
+                <button class="text-button" type="button" data-view-jump="map">Globe</button>
+              </div>
               <div class="layer-dock" id="layerControls" aria-label="Data layers"></div>
               <div class="selection-card" id="selectionCard"></div>
+              <svg class="demo-link" id="demoLink" aria-hidden="true">
+                <line id="demoLinkLine" x1="0" y1="0" x2="0" y2="0"></line>
+                <circle id="demoLinkDot" cx="0" cy="0" r="5"></circle>
+              </svg>
+              <article class="demo-callout" id="demoCallout" aria-hidden="true">
+                <div class="demo-callout-head">
+                  <span>Demo Mode</span>
+                  <button class="selection-close" type="button" id="closeDemoMode" aria-label="Exit demo mode">
+                    <i data-lucide="x"></i>
+                  </button>
+                </div>
+                <h3 id="demoTitle">Selecting public feed</h3>
+                <p id="demoMeta">Cycling live camera sources in view.</p>
+                <div class="demo-media" id="demoMedia"></div>
+                <small id="demoStatus">Preparing stream</small>
+              </article>
               <aside class="alert-drawer" id="alertDrawer" aria-hidden="true">
                 <div class="drawer-head compact">
                   <div>
@@ -157,24 +179,42 @@
 
           <section class="panel top-assets" id="assets">
             <div class="section-head">
-              <h2>Tracked Assets</h2>
-              <button class="text-button" type="button" id="showAllAssets">More</button>
+              <div>
+                <h2>Tracked Assets</h2>
+                <p>Visible signal samples from active layers, plus anything you pin.</p>
+              </div>
+              <div class="section-actions">
+                <button class="text-button" type="button" data-collapse-panel="assets">Collapse</button>
+                <button class="text-button" type="button" id="showAllAssets">More</button>
+              </div>
             </div>
             <div class="asset-list" id="assetList"></div>
           </section>
 
           <section class="panel region-summary">
             <div class="section-head">
-              <h2>Region Summary</h2>
-              <button class="text-button" type="button" id="sortRegions">Sort</button>
+              <div>
+                <h2>Region Summary</h2>
+                <p>Highest-volume regions in the currently loaded data.</p>
+              </div>
+              <div class="section-actions">
+                <button class="text-button" type="button" data-collapse-panel="regions">Collapse</button>
+                <button class="text-button" type="button" id="sortRegions">Sort</button>
+              </div>
             </div>
             <div class="region-list" id="regionList"></div>
           </section>
 
           <section class="panel alert-summary">
             <div class="section-head">
-              <h2>Alert Summary</h2>
-              <strong id="alertTotal">0</strong>
+              <div>
+                <h2>Alert Summary</h2>
+                <p>Severity mix for alert and hazard signals.</p>
+              </div>
+              <div class="section-actions">
+                <strong id="alertTotal">0</strong>
+                <button class="text-button" type="button" data-collapse-panel="alerts">Collapse</button>
+              </div>
             </div>
             <div class="severity-grid" id="severityGrid"></div>
           </section>
@@ -204,6 +244,10 @@
               <span>Map overlays</span>
               <button class="segment" type="button" id="toggleRadarOverlay">NOAA Radar</button>
               <button class="segment" type="button" id="toggleFloodOverlay">FEMA Flood</button>
+              <label class="map-dot-toggle">
+                <input id="showCameraMapMarkers" type="checkbox" checked />
+                <span>Camera dots</span>
+              </label>
             </div>
             <label class="stream-toggle">
               <input id="includeDownStreams" type="checkbox" />
@@ -286,6 +330,35 @@
           </article>
         </section>
 
+        <section class="insight-modal search-modal" id="searchModal" aria-hidden="true">
+          <div class="modal-backdrop" data-close-modal></div>
+          <article class="modal-card search-card">
+            <div class="section-head">
+              <div>
+                <h2>Search Oversee</h2>
+                <p>Search cameras, alerts, flights, satellites, fires, quakes, and population context without moving away from the globe.</p>
+              </div>
+              <button class="icon-button" type="button" data-close-modal title="Close">
+                <i data-lucide="x"></i>
+              </button>
+            </div>
+            <label class="global-search modal-search">
+              <i data-lucide="search"></i>
+              <input id="searchInput" type="search" placeholder="Search: Cuba, Havana, Germany, I-5, callsign, satellite..." />
+            </label>
+            <div class="search-hints modal-hints" aria-label="Search examples">
+              <span>Try</span>
+              <button type="button" data-search-term="Cuba">Cuba</button>
+              <button type="button" data-search-term="Havana">Havana</button>
+              <button type="button" data-search-term="Germany">Germany</button>
+              <button type="button" data-search-term="Atlanta">Atlanta</button>
+              <button type="button" data-search-term="Iowa">Iowa</button>
+              <button type="button" data-search-term="I-5">I-5</button>
+            </div>
+            <div class="search-results" id="searchResults"></div>
+          </article>
+        </section>
+
         <section class="source-drawer" id="sourceDrawer" aria-hidden="true">
           <div class="drawer-head">
             <h2>Free Data Stack</h2>
@@ -298,6 +371,29 @@
             <h3>Paid Later</h3>
             <p>Photorealistic 3D tiles, commercial ADS-B, AIS maritime feeds, high-resolution imagery, and archived playback storage.</p>
           </div>
+        </section>
+
+        <section class="source-drawer settings-drawer" id="settingsDrawer" aria-hidden="true">
+          <div class="drawer-head">
+            <div>
+              <h2>API Key Settings</h2>
+              <p>Bring your own keys for optional paid or rate-limited sources. Keys are saved only in local config.</p>
+            </div>
+            <button class="icon-button" type="button" id="closeSettingsPanel" title="Close">
+              <i data-lucide="x"></i>
+            </button>
+          </div>
+          <form class="settings-form" id="settingsForm">
+            <div class="settings-grid" id="settingsGrid"></div>
+            <div class="settings-actions">
+              <button class="text-button" type="submit">Save Settings</button>
+              <button class="text-button" type="button" id="openSourcePanel">
+                <i data-lucide="radio-tower"></i>
+                Free Data Stack
+              </button>
+              <span id="settingsStatus">Keys are masked after saving.</span>
+            </div>
+          </form>
         </section>
       </main>
     </div>
