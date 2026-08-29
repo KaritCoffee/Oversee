@@ -128,6 +128,11 @@
                 <i data-lucide="waves"></i>
                 <span>FEMA Flood</span>
               </button>
+              <button class="traffic-overlay-toggle" type="button" id="toggleGlobeTraffic" aria-pressed="false" title="Road traffic: modeled without a key, live congestion colors with a TomTom key">
+                <i data-lucide="route"></i>
+                <span>Road Traffic</span>
+              </button>
+              <span class="traffic-status-chip globe-traffic-status" id="globeTrafficStatus" role="status" aria-live="polite" hidden></span>
               <div class="stage-jump-bar" aria-label="Quick navigation">
                 <button class="text-button" type="button" data-view-jump="camera-browser">Watch feeds</button>
                 <button class="text-button" type="button" data-view-jump="map">Globe</button>
@@ -244,6 +249,8 @@
               <span>Map overlays</span>
               <button class="segment" type="button" id="toggleRadarOverlay">NOAA Radar</button>
               <button class="segment" type="button" id="toggleFloodOverlay">FEMA Flood</button>
+              <button class="segment" type="button" id="toggleTrafficOverlay" aria-pressed="false" title="Road traffic: modeled without a key, live congestion colors with a TomTom key">Road Traffic</button>
+              <span class="traffic-status-chip" id="cameraTrafficStatus" role="status" aria-live="polite" hidden></span>
               <label class="map-dot-toggle">
                 <input id="showCameraMapMarkers" type="checkbox" checked />
                 <span>Camera dots</span>

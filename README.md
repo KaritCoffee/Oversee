@@ -14,6 +14,7 @@ Oversee is a local-first operations console that fuses public geospatial data wi
 - NASA FIRMS VIIRS near-real-time fire hotspot layer when a local FIRMS map key is configured
 - EGP WildFireSA incidents, WFIGS perimeters, NWS alerts, and NHC tropical systems
 - NOAA radar and FEMA flood overlays for weather and hazard context
+- City-scale road traffic on both maps: an explicitly modeled OpenStreetMap motion layer by default, with optional TomTom real-time congestion colors
 - Census Population Estimates for state-level population context
 - Optional no-key launch missions from Launch Library 2 and public stations from Radio Browser
 - Optional live AIS vessel positions when the user supplies an AISStream key
@@ -23,7 +24,7 @@ Oversee is a local-first operations console that fuses public geospatial data wi
 
 ## Free Now, Paid Later
 
-The default experience intentionally uses free public sources. User-supplied keys can unlock NASA FIRMS, AISStream, keyed transportation catalogs, Cesium ion, Google 3D Tiles, and higher-quota flight services without putting credentials in the repository.
+The default experience intentionally uses free public sources. User-supplied keys can unlock NASA FIRMS, TomTom live traffic flow, AISStream, keyed transportation catalogs, Cesium ion, Google 3D Tiles, and higher-quota flight services without putting credentials in the repository.
 
 ## Run Locally
 
@@ -45,6 +46,7 @@ Optional:
 - Set `PORT` before starting if you want a specific port.
 - Enter optional credentials in Settings or provide supported environment variables. Local settings are stored outside Git.
 - Set `NASA_FIRMS_MAP_KEY`, `FIRMS_MAP_KEY`, or create an ignored `config.local.json` with `nasaFirmsMapKey` to enable NASA FIRMS fire hotspots.
+- Set `TOMTOM_TRAFFIC_API_KEY`, `TOMTOM_API_KEY`, or save `tomTomTrafficApiKey` in Settings to replace modeled road colors with TomTom traffic flow tiles. The local server hides the key, caches tiles, and enforces a 5,000-request daily ceiling.
 - Double-click [run-oversee.bat](./run-oversee.bat) to launch from Explorer.
 
 Development commands:
@@ -107,6 +109,8 @@ Satellite positions and tracks are propagated from public two-line elements with
 The globe intentionally samples very large layers so the UI stays responsive. Use the camera browser and map for full camera inventory browsing; use the globe for situational context and quick selection.
 
 Some public cameras expose true live players or HLS playlists, while many transportation cameras expose refreshed still images. The UI labels those differently, validates HLS streams before playing them, and auto-refreshes still images so the dashboard does not pretend a still image is video.
+
+The no-key road traffic layer is an illustrative time-of-day model over real OpenStreetMap road geometry, not a traffic observation. When a TomTom key is configured, road colors use TomTom Traffic Flow while the moving points remain illustrative. Both views are limited to city/metro zoom so global navigation does not waste public-service or keyed tile requests.
 
 The main public-signal snapshot refreshes every 60 seconds. Rate-sensitive aircraft and orbital requests are cached for 10 minutes, alerts and earthquakes refresh more often, and camera stills use each source's published or inferred interval.
 

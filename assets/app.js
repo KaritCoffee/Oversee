@@ -5,7 +5,9 @@ import { altitudeBudget, inGeoBounds, spatiallyBalancedSample } from "../src/cor
 import { MotionStore } from "../src/core/motion.js";
 import { SatellitePropagator } from "../src/core/satellite-motion.js";
 import { summarizeSourceHealth } from "../src/core/source-health.js";
+import { trafficModelForRoad } from "../src/core/traffic-model.js";
 import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
+import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
 
 (function () {
   const DATA = globalThis.OVERSEE_DATA || { feeds: [], sources: [], layers: [] };
@@ -92,6 +94,11 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
       name: "NOAA Radar WMS",
       status: "Free public weather overlay",
       detail: "The camera map can overlay CONUS base reflectivity from NOAA/NCEP without requiring a subscription.",
+    },
+    {
+      name: "OpenStreetMap Roads / TomTom Traffic",
+      status: "Modeled free layer + optional live flow",
+      detail: "Bounded OpenStreetMap road queries power the no-key modeled motion layer. A user-supplied TomTom key adds observed congestion colors while keeping the key behind the local server.",
     },
     {
       name: "FEMA National Flood Hazard Layer",
@@ -208,8 +215,17 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     radarOverlay: false,
     floodLayer: null,
     floodOverlay: false,
+    mapTrafficOverlay: false,
+    trafficStatus: null,
+    trafficStatusFetchedAt: 0,
+    trafficMapTileLayer: null,
+    trafficMapRoadLayer: null,
+    trafficMapRenderer: null,
+    trafficMapRefreshTimer: null,
+    trafficMapRequestToken: 0,
     globeWeatherOverlay: false,
     globeFloodOverlay: false,
+    globeTrafficOverlay: false,
     idleSpin: false,
     demoMode: false,
     demoTimer: null,
@@ -265,6 +281,11 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     renderRetry: null,
     motionTimer: null,
     lastSelectionUpdate: 0,
+    trafficLayer: null,
+    trafficImageryLayer: null,
+    trafficRefreshTimer: null,
+    trafficRequestToken: 0,
+    trafficBoundsKey: "",
   };
 
   const motionStore = new MotionStore({ renderDelayMs: 15_000, maxCoastMs: 120_000 });
@@ -309,6 +330,8 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     alertDrawerCount: document.getElementById("alertDrawerCount"),
     toggleGlobeWeather: document.getElementById("toggleGlobeWeather"),
     toggleGlobeFlood: document.getElementById("toggleGlobeFlood"),
+    toggleGlobeTraffic: document.getElementById("toggleGlobeTraffic"),
+    globeTrafficStatus: document.getElementById("globeTrafficStatus"),
     regionList: document.getElementById("regionList"),
     sortRegions: document.getElementById("sortRegions"),
     cameraFilterControls: document.getElementById("cameraFilterControls"),
@@ -337,6 +360,8 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     cameraMap: document.getElementById("cameraMap"),
     toggleRadarOverlay: document.getElementById("toggleRadarOverlay"),
     toggleFloodOverlay: document.getElementById("toggleFloodOverlay"),
+    toggleTrafficOverlay: document.getElementById("toggleTrafficOverlay"),
+    cameraTrafficStatus: document.getElementById("cameraTrafficStatus"),
     cameraMapMeta: document.getElementById("cameraMapMeta"),
     catalogList: document.getElementById("catalogList"),
     catalogTitle: document.getElementById("catalogTitle"),
@@ -412,6 +437,7 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     els.closeAlertDrawer.addEventListener("click", () => toggleAlertDrawer(false));
     els.toggleGlobeWeather.addEventListener("click", toggleGlobeWeatherOverlay);
     els.toggleGlobeFlood.addEventListener("click", toggleGlobeFloodOverlay);
+    els.toggleGlobeTraffic.addEventListener("click", toggleGlobeTrafficOverlay);
     els.openSignalModal.addEventListener("click", () => toggleInsightModal("signal", true));
     els.openLayerModal.addEventListener("click", () => toggleInsightModal("layer", true));
     els.sortRegions.addEventListener("click", () => {
@@ -459,6 +485,7 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     });
     els.toggleRadarOverlay.addEventListener("click", toggleRadarOverlay);
     els.toggleFloodOverlay.addEventListener("click", toggleFloodOverlay);
+    els.toggleTrafficOverlay.addEventListener("click", toggleMapTrafficOverlay);
 
     document.body.addEventListener("click", (event) => {
       if (event.target.closest("[data-close-selection]")) {
@@ -697,6 +724,7 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
         <span>
           <strong>${escapeHtml(setting.label)}</strong>
           <small>${settingStatusText(setting)}</small>
+          ${setting.description ? `<small class="settings-description">${escapeHtml(setting.description)}</small>` : ""}
         </span>
         <input
           type="password"
@@ -741,8 +769,12 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
       });
       if (!response.ok) throw new Error(`Save failed with status ${response.status}`);
       state.settings = await response.json();
+      state.trafficStatus = null;
+      state.trafficStatusFetchedAt = 0;
       renderSettings();
       refreshSnapshot({ keepSelection: true, quiet: false, force: true });
+      if (state.globeTrafficOverlay) updateCesiumTrafficLayer();
+      if (state.mapTrafficOverlay) refreshMapTrafficOverlay();
     } catch (error) {
       els.settingsStatus.textContent = error.message;
     }
@@ -1663,6 +1695,13 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
 
   function setGlobeRenderer(rendererId) {
     const requested = rendererId === "cesium" ? "cesium" : "three";
+    if (requested !== "cesium" && state.globeTrafficOverlay) {
+      state.globeTrafficOverlay = false;
+      els.toggleGlobeTraffic.classList.remove("active");
+      els.toggleGlobeTraffic.setAttribute("aria-pressed", "false");
+      setTrafficStatusChip(els.globeTrafficStatus, "", { hidden: true });
+      clearGlobeTrafficOverlay();
+    }
     state.globeRenderer = requested === "cesium" && !globalThis.Cesium ? "three" : requested;
     localStorage.setItem("oversee:globe-renderer", state.globeRenderer);
     document.querySelectorAll("[data-globe-renderer]").forEach((button) => {
@@ -1850,17 +1889,22 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
       }
       cesiumGlobe.selectionSource = new Cesium.CustomDataSource("oversee-selection");
       await viewer.dataSources.add(cesiumGlobe.selectionSource);
+      cesiumGlobe.trafficLayer = new CesiumRoadTrafficLayer({ viewer, Cesium });
 
       await updateCesiumBaseLayer();
       updateCesiumWeatherLayer();
       updateCesiumFloodLayer();
+      updateCesiumTrafficLayer();
 
       viewer.screenSpaceEventHandler.setInputAction((movement) => {
         const picked = viewer.scene.pick(movement.position);
         const data = picked?.id?.oversee;
         if (data?.item) selectObject(data.type, displayItemForGlobe(data.type, data.item), { focus: false });
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
-      viewer.camera.moveEnd.addEventListener(() => renderCesiumLayers());
+      viewer.camera.moveEnd.addEventListener(() => {
+        renderCesiumLayers();
+        scheduleGlobeTrafficRefresh();
+      });
 
       cesiumGlobe.ready = true;
       cesiumGlobe.failed = false;
@@ -2020,6 +2064,200 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     cesiumGlobe.floodLayer.brightness = 1.05;
   }
 
+  async function ensureTrafficStatus(options = {}) {
+    const isFresh = state.trafficStatus && Date.now() - state.trafficStatusFetchedAt < 60 * 1000;
+    if (isFresh && !options.force) return state.trafficStatus;
+    try {
+      const response = await fetch(`/api/traffic/status?ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`Traffic status failed with ${response.status}`);
+      state.trafficStatus = await response.json();
+      state.trafficStatusFetchedAt = Date.now();
+    } catch (error) {
+      state.trafficStatus = {
+        mode: "modeled",
+        health: "degraded",
+        provider: "OpenStreetMap road model",
+        detail: "Road traffic status is temporarily unavailable.",
+        message: error.message,
+      };
+      state.trafficStatusFetchedAt = Date.now();
+    }
+    return state.trafficStatus;
+  }
+
+  async function toggleGlobeTrafficOverlay() {
+    state.globeTrafficOverlay = !state.globeTrafficOverlay;
+    els.toggleGlobeTraffic.classList.toggle("active", state.globeTrafficOverlay);
+    els.toggleGlobeTraffic.setAttribute("aria-pressed", state.globeTrafficOverlay ? "true" : "false");
+    if (!state.globeTrafficOverlay) {
+      clearGlobeTrafficOverlay();
+      setTrafficStatusChip(els.globeTrafficStatus, "", { hidden: true });
+      return;
+    }
+    setTrafficStatusChip(els.globeTrafficStatus, "Checking traffic source", { state: "loading" });
+    if (state.globeRenderer !== "cesium") setGlobeRenderer("cesium");
+    await ensureCesiumGlobeReady();
+    await ensureTrafficStatus({ force: true });
+    await updateCesiumTrafficLayer();
+  }
+
+  async function updateCesiumTrafficLayer() {
+    els.toggleGlobeTraffic.classList.toggle("active", state.globeTrafficOverlay);
+    els.toggleGlobeTraffic.setAttribute("aria-pressed", state.globeTrafficOverlay ? "true" : "false");
+    if (!state.globeTrafficOverlay) {
+      clearGlobeTrafficOverlay();
+      return;
+    }
+    if (!cesiumGlobe.viewer || !cesiumGlobe.trafficLayer) return;
+    cesiumGlobe.trafficLayer.setVisible(true);
+    await refreshGlobeTrafficOverlay();
+  }
+
+  function scheduleGlobeTrafficRefresh() {
+    if (!state.globeTrafficOverlay) return;
+    window.clearTimeout(cesiumGlobe.trafficRefreshTimer);
+    cesiumGlobe.trafficRefreshTimer = window.setTimeout(refreshGlobeTrafficOverlay, 520);
+  }
+
+  async function refreshGlobeTrafficOverlay() {
+    if (!state.globeTrafficOverlay || !cesiumGlobe.viewer || !cesiumGlobe.trafficLayer) return;
+    const status = await ensureTrafficStatus();
+    const view = getCesiumTrafficView();
+    if (!view) {
+      removeCesiumTrafficImagery();
+      cesiumGlobe.trafficLayer.setVisible(false);
+      setTrafficStatusChip(els.globeTrafficStatus, "Zoom closer for road traffic", {
+        state: "zoom",
+        title: "Road traffic appears at city and metro scale to protect public services and API budgets.",
+      });
+      return;
+    }
+
+    cesiumGlobe.trafficLayer.setVisible(true);
+    if (status.mode === "live" && status.health !== "budget-exhausted") ensureCesiumTrafficImagery();
+    else removeCesiumTrafficImagery();
+    const boundsKey = `${view.detail}:${view.bbox}`;
+    if (cesiumGlobe.trafficBoundsKey === boundsKey && cesiumGlobe.trafficLayer.particles.length) {
+      renderTrafficModeStatus(els.globeTrafficStatus, status);
+      return;
+    }
+
+    const requestToken = ++cesiumGlobe.trafficRequestToken;
+    setTrafficStatusChip(els.globeTrafficStatus, "Loading roads", { state: "loading" });
+    try {
+      const response = await fetch(`/api/traffic/roads?bbox=${encodeURIComponent(view.bbox)}&detail=${view.detail}&ts=${Date.now()}`);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || `Road query failed with ${response.status}`);
+      if (requestToken !== cesiumGlobe.trafficRequestToken || !state.globeTrafficOverlay) return;
+      cesiumGlobe.trafficBoundsKey = boundsKey;
+      cesiumGlobe.trafficLayer.setRoads(payload.roads, { mode: status.mode });
+      renderTrafficModeStatus(els.globeTrafficStatus, status, payload.roads.length ? "" : "No mapped major roads in view");
+      if (status.mode === "live") {
+        window.setTimeout(async () => {
+          if (!state.globeTrafficOverlay) return;
+          const refreshed = await ensureTrafficStatus({ force: true });
+          renderTrafficModeStatus(els.globeTrafficStatus, refreshed);
+        }, 2600);
+      }
+    } catch (error) {
+      if (requestToken !== cesiumGlobe.trafficRequestToken) return;
+      cesiumGlobe.trafficLayer.clear();
+      setTrafficStatusChip(els.globeTrafficStatus, "Road layer unavailable", { state: "error", title: error.message });
+    }
+  }
+
+  function getCesiumTrafficView() {
+    const viewer = cesiumGlobe.viewer;
+    const Cesium = globalThis.Cesium;
+    if (!viewer || !Cesium) return null;
+    const height = Number(viewer.camera.positionCartographic?.height || Infinity);
+    if (!Number.isFinite(height) || height > 900000) return null;
+    const rectangle = viewer.camera.computeViewRectangle(viewer.scene.globe.ellipsoid);
+    if (!rectangle) return null;
+    const west = Cesium.Math.toDegrees(rectangle.west);
+    const south = Math.max(-85, Cesium.Math.toDegrees(rectangle.south));
+    const east = Cesium.Math.toDegrees(rectangle.east);
+    const north = Math.min(85, Cesium.Math.toDegrees(rectangle.north));
+    if (![west, south, east, north].every(Number.isFinite) || east <= west) return null;
+    const lngSpan = east - west;
+    const latSpan = north - south;
+    if (lngSpan > 5.4 || latSpan > 4.4 || lngSpan * latSpan > 17.5) return null;
+    const detail = height < 210000 && lngSpan < 1.7 && latSpan < 1.7 ? "local" : "major";
+    return {
+      detail,
+      bbox: [west, south, east, north].map((value) => value.toFixed(5)).join(","),
+    };
+  }
+
+  function ensureCesiumTrafficImagery() {
+    const viewer = cesiumGlobe.viewer;
+    const Cesium = globalThis.Cesium;
+    if (!viewer || !Cesium || cesiumGlobe.trafficImageryLayer) return;
+    try {
+      const provider = new Cesium.UrlTemplateImageryProvider({
+        url: "/api/traffic/flow/{z}/{x}/{y}.png",
+        tilingScheme: new Cesium.WebMercatorTilingScheme(),
+        minimumLevel: 0,
+        maximumLevel: 20,
+        credit: new Cesium.Credit("TomTom Traffic"),
+      });
+      cesiumGlobe.trafficImageryLayer = viewer.imageryLayers.addImageryProvider(provider);
+      cesiumGlobe.trafficImageryLayer.alpha = 0.82;
+      cesiumGlobe.trafficImageryLayer.brightness = 1.12;
+      cesiumGlobe.trafficImageryLayer.contrast = 1.14;
+    } catch (error) {
+      console.warn("Live traffic imagery unavailable", error);
+    }
+  }
+
+  function removeCesiumTrafficImagery() {
+    if (!cesiumGlobe.viewer || !cesiumGlobe.trafficImageryLayer) return;
+    cesiumGlobe.viewer.imageryLayers.remove(cesiumGlobe.trafficImageryLayer, false);
+    cesiumGlobe.trafficImageryLayer = null;
+  }
+
+  function clearGlobeTrafficOverlay() {
+    window.clearTimeout(cesiumGlobe.trafficRefreshTimer);
+    cesiumGlobe.trafficRequestToken += 1;
+    cesiumGlobe.trafficBoundsKey = "";
+    removeCesiumTrafficImagery();
+    cesiumGlobe.trafficLayer?.clear();
+    cesiumGlobe.trafficLayer?.setVisible(false);
+  }
+
+  function renderTrafficModeStatus(element, status, override = "") {
+    if (override) {
+      setTrafficStatusChip(element, override, { state: "empty", title: status?.detail || "" });
+      return;
+    }
+    if (status?.mode === "live") {
+      const healthLabel = status.health === "budget-exhausted"
+        ? "Daily ceiling reached"
+        : status.health === "degraded"
+          ? "Live traffic degraded"
+          : status.health === "ready"
+            ? "Live traffic ready"
+            : "Live traffic · TomTom";
+      setTrafficStatusChip(element, healthLabel, {
+        state: status.health === "degraded" || status.health === "budget-exhausted" ? "error" : "live",
+        title: [status.detail, status.message].filter(Boolean).join(" "),
+      });
+      return;
+    }
+    setTrafficStatusChip(element, "Modeled traffic · OSM", {
+      state: status?.health === "degraded" ? "error" : "modeled",
+      title: status?.detail || "Illustrative road movement, not observed traffic.",
+    });
+  }
+
+  function setTrafficStatusChip(element, text, options = {}) {
+    if (!element) return;
+    element.hidden = Boolean(options.hidden);
+    element.textContent = text;
+    element.dataset.state = options.state || "";
+    element.title = options.title || "";
+  }
+
   async function ensureCesiumGlobeReady() {
     if (cesiumGlobe.ready || state.globeRenderer !== "cesium") return;
     if (!cesiumGlobe.loading) initCesiumGlobe();
@@ -2071,6 +2309,7 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     if (!globe.renderer) return;
     globe.animationId = requestAnimationFrame(animateGlobe);
     if (state.globeRenderer === "cesium") {
+      cesiumGlobe.trafficLayer?.update(performance.now());
       if (state.idleSpin && cesiumGlobe.ready && cesiumGlobe.viewer) {
         cesiumGlobe.viewer.camera.rotate(globalThis.Cesium.Cartesian3.UNIT_Z, -0.00018);
         cesiumGlobe.viewer.scene.requestRender();
@@ -2790,6 +3029,12 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
     if (!globalThis.L || !els.cameraMap) return;
     state.cameraRenderer = globalThis.L.canvas({ padding: 0.5 });
     state.cameraMap = globalThis.L.map(els.cameraMap, { zoomControl: true, minZoom: 2, renderer: state.cameraRenderer }).setView([20, 0], 2);
+    state.cameraMap.createPane("trafficTilePane");
+    state.cameraMap.getPane("trafficTilePane").style.zIndex = "240";
+    state.cameraMap.createPane("trafficMotionPane");
+    state.cameraMap.getPane("trafficMotionPane").style.zIndex = "360";
+    state.cameraMap.getPane("trafficMotionPane").style.pointerEvents = "none";
+    state.trafficMapRenderer = globalThis.L.svg({ pane: "trafficMotionPane", padding: 0.5 });
     globalThis.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
@@ -2800,6 +3045,7 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
       state.mapListMode = true;
       state.catalogLimit = 120;
       renderCatalog();
+      scheduleMapTrafficRefresh();
     });
     state.cameraMap.on("click", () => {
       state.mapListMode = true;
@@ -2865,6 +3111,149 @@ import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
       state.floodLayer.removeFrom(state.cameraMap);
     }
     els.toggleFloodOverlay.classList.toggle("active", state.floodOverlay);
+  }
+
+  async function toggleMapTrafficOverlay() {
+    state.mapTrafficOverlay = !state.mapTrafficOverlay;
+    els.toggleTrafficOverlay.classList.toggle("active", state.mapTrafficOverlay);
+    els.toggleTrafficOverlay.setAttribute("aria-pressed", state.mapTrafficOverlay ? "true" : "false");
+    if (!state.mapTrafficOverlay) {
+      clearMapTrafficOverlay();
+      setTrafficStatusChip(els.cameraTrafficStatus, "", { hidden: true });
+      return;
+    }
+    setTrafficStatusChip(els.cameraTrafficStatus, "Checking source", { state: "loading" });
+    await ensureTrafficStatus({ force: true });
+    await refreshMapTrafficOverlay();
+  }
+
+  function scheduleMapTrafficRefresh() {
+    if (!state.mapTrafficOverlay) return;
+    window.clearTimeout(state.trafficMapRefreshTimer);
+    state.trafficMapRefreshTimer = window.setTimeout(refreshMapTrafficOverlay, 420);
+  }
+
+  async function refreshMapTrafficOverlay() {
+    if (!state.mapTrafficOverlay || !state.cameraMap || !globalThis.L) return;
+    const status = await ensureTrafficStatus();
+    const view = getLeafletTrafficView();
+    if (!view) {
+      removeMapTrafficTileLayer();
+      state.trafficMapRoadLayer?.clearLayers();
+      setTrafficStatusChip(els.cameraTrafficStatus, "Zoom closer", {
+        state: "zoom",
+        title: "Road traffic appears at city and metro scale.",
+      });
+      return;
+    }
+
+    if (status.mode === "live" && status.health !== "budget-exhausted") ensureMapTrafficTileLayer();
+    else removeMapTrafficTileLayer();
+    const requestToken = ++state.trafficMapRequestToken;
+    setTrafficStatusChip(els.cameraTrafficStatus, "Loading roads", { state: "loading" });
+    try {
+      const response = await fetch(`/api/traffic/roads?bbox=${encodeURIComponent(view.bbox)}&detail=${view.detail}&ts=${Date.now()}`);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || `Road query failed with ${response.status}`);
+      if (requestToken !== state.trafficMapRequestToken || !state.mapTrafficOverlay) return;
+      renderMapTrafficRoads(payload.roads, status.mode);
+      renderTrafficModeStatus(els.cameraTrafficStatus, status, payload.roads.length ? "" : "No mapped major roads in view");
+      if (status.mode === "live") {
+        window.setTimeout(async () => {
+          if (!state.mapTrafficOverlay) return;
+          const refreshed = await ensureTrafficStatus({ force: true });
+          renderTrafficModeStatus(els.cameraTrafficStatus, refreshed);
+        }, 2600);
+      }
+    } catch (error) {
+      if (requestToken !== state.trafficMapRequestToken) return;
+      state.trafficMapRoadLayer?.clearLayers();
+      if (status.mode === "live" && state.trafficMapTileLayer) {
+        renderTrafficModeStatus(els.cameraTrafficStatus, status);
+        els.cameraTrafficStatus.title = `${status.detail || ""} Road animation unavailable: ${error.message}`.trim();
+      } else {
+        setTrafficStatusChip(els.cameraTrafficStatus, "Road layer unavailable", { state: "error", title: error.message });
+      }
+    }
+  }
+
+  function getLeafletTrafficView() {
+    const map = state.cameraMap;
+    if (!map || map.getZoom() < 8) return null;
+    const bounds = map.getBounds();
+    const west = Number(bounds.getWest());
+    const south = Math.max(-85, Number(bounds.getSouth()));
+    const east = Number(bounds.getEast());
+    const north = Math.min(85, Number(bounds.getNorth()));
+    if (![west, south, east, north].every(Number.isFinite) || east <= west) return null;
+    const lngSpan = east - west;
+    const latSpan = north - south;
+    if (lngSpan > 5.4 || latSpan > 4.4 || lngSpan * latSpan > 17.5) return null;
+    const detail = map.getZoom() >= 12 && lngSpan < 1.7 && latSpan < 1.7 ? "local" : "major";
+    return {
+      detail,
+      bbox: [west, south, east, north].map((value) => value.toFixed(5)).join(","),
+    };
+  }
+
+  function ensureMapTrafficTileLayer() {
+    if (state.trafficMapTileLayer || !state.cameraMap || !globalThis.L) return;
+    state.trafficMapTileLayer = globalThis.L.tileLayer("/api/traffic/flow/{z}/{x}/{y}.png", {
+      pane: "trafficTilePane",
+      minZoom: 0,
+      maxZoom: 20,
+      opacity: 0.82,
+      keepBuffer: 1,
+      updateWhenIdle: true,
+      attribution: "TomTom Traffic",
+    });
+    state.trafficMapTileLayer.on("tileerror", () => {
+      window.setTimeout(async () => {
+        if (!state.mapTrafficOverlay) return;
+        const status = await ensureTrafficStatus({ force: true });
+        renderTrafficModeStatus(els.cameraTrafficStatus, status);
+      }, 600);
+    });
+    state.trafficMapTileLayer.addTo(state.cameraMap);
+  }
+
+  function removeMapTrafficTileLayer() {
+    if (!state.trafficMapTileLayer || !state.cameraMap) return;
+    state.trafficMapTileLayer.removeFrom(state.cameraMap);
+    state.trafficMapTileLayer = null;
+  }
+
+  function renderMapTrafficRoads(roads, mode) {
+    if (!state.cameraMap || !globalThis.L) return;
+    if (!state.trafficMapRoadLayer) state.trafficMapRoadLayer = globalThis.L.layerGroup().addTo(state.cameraMap);
+    state.trafficMapRoadLayer.clearLayers();
+    const selected = (Array.isArray(roads) ? roads : []).slice(0, 280);
+    for (const road of selected) {
+      const latLngs = (road.coordinates || []).map(([lng, lat]) => [Number(lat), Number(lng)]).filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+      if (latLngs.length < 2) continue;
+      const model = trafficModelForRoad(road);
+      const speedClass = model.ratio < 0.35 ? "slow" : model.ratio < 0.68 ? "medium" : "fast";
+      const color = mode === "live" ? "#e9fbff" : model.color;
+      const line = globalThis.L.polyline(latLngs, {
+        renderer: state.trafficMapRenderer,
+        pane: "trafficMotionPane",
+        className: `oversee-traffic-motion traffic-motion-${mode} traffic-motion-${speedClass}`,
+        color,
+        opacity: mode === "live" ? 0.26 : 0.78,
+        weight: /^(motorway|trunk)/.test(road.highway) ? 3 : 2,
+        dashArray: mode === "live" ? "2 18" : "4 12",
+        lineCap: "round",
+        interactive: false,
+      });
+      line.addTo(state.trafficMapRoadLayer);
+    }
+  }
+
+  function clearMapTrafficOverlay() {
+    window.clearTimeout(state.trafficMapRefreshTimer);
+    state.trafficMapRequestToken += 1;
+    removeMapTrafficTileLayer();
+    state.trafficMapRoadLayer?.clearLayers();
   }
 
   function renderCameraMap(options = {}) {

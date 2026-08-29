@@ -626,7 +626,7 @@ a {
 .stage-jump-bar {
   position: absolute;
   right: 18px;
-  top: 154px;
+  top: 238px;
   z-index: 5;
   display: flex;
   flex-wrap: wrap;
@@ -717,7 +717,8 @@ a {
 }
 
 .weather-overlay-toggle,
-.flood-overlay-toggle {
+.flood-overlay-toggle,
+.traffic-overlay-toggle {
   position: absolute;
   right: 18px;
   z-index: 8;
@@ -746,10 +747,16 @@ a {
   top: 108px;
 }
 
+.traffic-overlay-toggle {
+  top: 152px;
+}
+
 .weather-overlay-toggle:hover,
 .weather-overlay-toggle.active,
 .flood-overlay-toggle:hover,
-.flood-overlay-toggle.active {
+.flood-overlay-toggle.active,
+.traffic-overlay-toggle:hover,
+.traffic-overlay-toggle.active {
   border-color: rgba(25, 226, 255, 0.78);
   color: white;
   background: rgba(0, 96, 150, 0.82);
@@ -762,10 +769,71 @@ a {
   box-shadow: 0 0 24px rgba(24, 240, 160, 0.15);
 }
 
+.traffic-overlay-toggle.active {
+  border-color: rgba(255, 176, 46, 0.82);
+  background: rgba(116, 65, 0, 0.86);
+  box-shadow: 0 0 24px rgba(255, 176, 46, 0.2);
+}
+
 .weather-overlay-toggle svg,
-.flood-overlay-toggle svg {
+.flood-overlay-toggle svg,
+.traffic-overlay-toggle svg {
   width: 16px;
   height: 16px;
+}
+
+.traffic-status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 3px 8px;
+  border: 1px solid rgba(105, 151, 181, 0.34);
+  border-radius: 999px;
+  color: #b8cad8;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: rgba(4, 14, 22, 0.82);
+  box-shadow: 0 0 16px rgba(0, 0, 0, 0.22);
+}
+
+.traffic-status-chip[hidden] {
+  display: none;
+}
+
+.globe-traffic-status {
+  position: absolute;
+  top: 196px;
+  right: 18px;
+  z-index: 8;
+  max-width: 260px;
+}
+
+.traffic-status-chip[data-state="live"] {
+  border-color: rgba(49, 229, 143, 0.58);
+  color: #72f4b7;
+}
+
+.traffic-status-chip[data-state="modeled"] {
+  border-color: rgba(255, 176, 46, 0.58);
+  color: #ffc86d;
+}
+
+.traffic-status-chip[data-state="loading"] {
+  border-color: rgba(25, 226, 255, 0.52);
+  color: #75efff;
+}
+
+.traffic-status-chip[data-state="zoom"],
+.traffic-status-chip[data-state="empty"] {
+  color: #a8bac8;
+}
+
+.traffic-status-chip[data-state="error"] {
+  border-color: rgba(255, 78, 87, 0.56);
+  color: #ff8e95;
 }
 
 .stage.demo-active {
@@ -786,7 +854,9 @@ a {
 .stage.demo-active .selection-card.visible,
 .stage.demo-active .alert-drawer-toggle,
 .stage.demo-active .weather-overlay-toggle,
-.stage.demo-active .flood-overlay-toggle {
+.stage.demo-active .flood-overlay-toggle,
+.stage.demo-active .traffic-overlay-toggle,
+.stage.demo-active .globe-traffic-status {
   opacity: 0.14;
   transition: opacity 160ms ease;
 }
@@ -796,7 +866,9 @@ a {
 .stage.demo-active .layer-dock:hover,
 .stage.demo-active .alert-drawer-toggle:hover,
 .stage.demo-active .weather-overlay-toggle:hover,
-.stage.demo-active .flood-overlay-toggle:hover {
+.stage.demo-active .flood-overlay-toggle:hover,
+.stage.demo-active .traffic-overlay-toggle:hover,
+.stage.demo-active .globe-traffic-status:hover {
   opacity: 1;
 }
 
@@ -1758,6 +1830,43 @@ a {
   padding-inline: 10px;
 }
 
+.map-overlay-row .traffic-status-chip {
+  min-height: 30px;
+}
+
+path.oversee-traffic-motion {
+  animation: trafficFlowDash 2.8s linear infinite;
+  filter: drop-shadow(0 0 2px currentColor);
+}
+
+path.traffic-motion-slow {
+  animation-duration: 5.2s;
+}
+
+path.traffic-motion-medium {
+  animation-duration: 3.4s;
+}
+
+path.traffic-motion-fast {
+  animation-duration: 2.2s;
+}
+
+path.traffic-motion-live {
+  filter: drop-shadow(0 0 2px rgba(233, 251, 255, 0.58));
+}
+
+@keyframes trafficFlowDash {
+  to {
+    stroke-dashoffset: -48;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  path.oversee-traffic-motion {
+    animation: none;
+  }
+}
+
 .map-dot-toggle {
   display: inline-flex;
   gap: 7px;
@@ -2085,6 +2194,13 @@ a {
   color: var(--muted);
 }
 
+.settings-field .settings-description {
+  display: block;
+  margin-top: 5px;
+  color: #91aabd;
+  line-height: 1.35;
+}
+
 .settings-field input[type="password"] {
   width: 100%;
   border: 1px solid rgba(111, 177, 214, 0.28);
@@ -2338,13 +2454,23 @@ a {
   }
 
   .weather-overlay-toggle,
-  .flood-overlay-toggle {
+  .flood-overlay-toggle,
+  .traffic-overlay-toggle {
     top: 56px;
     right: 12px;
   }
 
   .flood-overlay-toggle {
     top: 100px;
+  }
+
+  .traffic-overlay-toggle {
+    top: 144px;
+  }
+
+  .globe-traffic-status {
+    top: 188px;
+    right: 12px;
   }
 
   .alert-drawer {

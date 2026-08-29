@@ -9,9 +9,17 @@ const { fetchRadioStations } = require("./server-src/radio-browser.js");
 const { satnogsRecordToGp } = require("./server-src/satellite-fallback.js");
 const { parseCensusPopulationCsv } = require("./server-src/census-population.js");
 const { RemoteMediaPolicy } = require("./server-src/remote-media-policy.js");
+const {
+  DailyTrafficBudget,
+  buildOverpassRoadQuery,
+  normalizeOverpassRoads,
+  normalizeTrafficBbox,
+  parseTrafficTilePath,
+  quantizeTrafficBbox,
+} = require("./server-src/road-traffic.js");
 
 const ROOT = __dirname;
-const APP_VERSION = "3.0.0";
+const APP_VERSION = "3.1.0";
 const BUILT_FRONTEND_ROOT = path.join(ROOT, "dist");
 const STATIC_ROOT = process.env.OVERSEE_STATIC_ROOT
   ? path.resolve(process.env.OVERSEE_STATIC_ROOT)
@@ -88,6 +96,11 @@ const SOURCE_URLS = {
   wisconsin511Cameras: "https://511wi.gov/api/v2/get/cameras",
   louisiana511Cameras: "https://511la.org/api/v2/get/cameras",
   driveNcCameras: "https://nc.prod.traveliq.co/api/v2/get/cameras",
+  overpassRoads: [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+  ],
+  tomTomTrafficFlow: "https://api.tomtom.com/traffic/map/4/tile/flow/relative0",
 };
 
 const GIBS_TEXTURES = {
@@ -687,11 +700,25 @@ const FALLBACK_STILL_URLS = {
 const cache = new Map();
 const aisCollector = new AisCollector();
 const remoteMediaPolicy = new RemoteMediaPolicy();
+const trafficTileCache = new Map();
+const trafficRuntime = {
+  lastTileSuccessAt: 0,
+  lastTileErrorAt: 0,
+  lastTileError: "",
+  lastRoadSuccessAt: 0,
+  lastRoadErrorAt: 0,
+  lastRoadError: "",
+};
+const trafficBudget = loadTrafficBudget();
 let serverPort = REQUESTED_PORT;
 
 const server = http.createServer(async (request, response) => {
   try {
     const requestUrl = new URL(request.url, `http://${request.headers.host}`);
+
+    if (requestUrl.pathname.startsWith("/api/traffic/") && !isLocalResourceRequest(request)) {
+      return sendJson(response, 403, { error: "Forbidden origin" });
+    }
 
     if (requestUrl.pathname === "/api/health") {
       return sendJson(response, 200, { ok: true, version: APP_VERSION, port: serverPort, generatedAt: new Date().toISOString() });
@@ -740,6 +767,22 @@ const server = http.createServer(async (request, response) => {
     if (requestUrl.pathname === "/api/vessels") {
       configureAisCollector();
       return sendJson(response, 200, aisCollector.snapshot());
+    }
+
+    if (requestUrl.pathname === "/api/traffic/status") {
+      return sendJson(response, 200, buildTrafficStatus());
+    }
+
+    if (requestUrl.pathname === "/api/traffic/roads") {
+      return handleTrafficRoadRequest(requestUrl, response);
+    }
+
+    const trafficTile = parseTrafficTilePath(requestUrl.pathname);
+    if (trafficTile) {
+      return proxyTrafficFlowTile(trafficTile, response);
+    }
+    if (requestUrl.pathname.startsWith("/api/traffic/flow/")) {
+      return sendJson(response, 400, { error: "Invalid traffic tile coordinates" });
     }
 
     if (requestUrl.pathname === "/api/feed-view") {
@@ -2714,7 +2757,7 @@ async function verifyKnownEmbedPlayer(view) {
   const result = await getCached(`embed:${view.url}`, 2 * 60 * 1000, async () => {
     const response = await fetch(view.url, {
       headers: {
-        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
       },
       signal: AbortSignal.timeout(8000),
@@ -2930,7 +2973,7 @@ async function verifyHlsPlaylist(url) {
   const result = await getCached(`hls:${url}`, 5 * 60 * 1000, async () => {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
         Accept: "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.9, */*;q=0.8",
       },
       signal: AbortSignal.timeout(7000),
@@ -2948,7 +2991,7 @@ async function verifyVideoAsset(url) {
   const result = await getCached(`video:${url}`, 5 * 60 * 1000, async () => {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
         Accept: "video/*,*/*;q=0.8",
         Range: "bytes=0-1",
       },
@@ -4154,7 +4197,7 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+      "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
       Accept: "application/geo+json, application/json, text/plain;q=0.9, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -4170,7 +4213,7 @@ async function fetchText(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+      "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
       Accept: options.accept || "text/plain, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -4180,6 +4223,222 @@ async function fetchText(url, options = {}) {
 
   if (!response.ok) throw new Error(`${new URL(url).hostname} returned ${response.status}`);
   return response.text();
+}
+
+function buildTrafficStatus() {
+  const configured = Boolean(getConfiguredSecret("tomTomTrafficApiKey", ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"]));
+  const budget = trafficBudget.snapshot();
+  const recentError = trafficRuntime.lastTileErrorAt > trafficRuntime.lastTileSuccessAt
+    ? trafficRuntime.lastTileError
+    : "";
+  const health = !configured
+    ? "modeled"
+    : !budget.remaining
+      ? "budget-exhausted"
+      : recentError
+        ? "degraded"
+        : trafficRuntime.lastTileSuccessAt
+          ? "live"
+          : "ready";
+  return {
+    generatedAt: new Date().toISOString(),
+    configured,
+    mode: configured ? "live" : "modeled",
+    health,
+    provider: configured ? "TomTom Traffic Flow" : "OpenStreetMap road model",
+    label: configured ? "Live road flow" : "Modeled road activity",
+    detail: configured
+      ? "Road colors use TomTom real-time traffic flow. Moving points are illustrative and follow OpenStreetMap roads."
+      : "Road colors and moving points are an illustrative time-of-day model, not observed traffic.",
+    message: recentError || (!budget.remaining ? "The local daily traffic tile ceiling has been reached" : ""),
+    updatedAt: trafficRuntime.lastTileSuccessAt
+      ? new Date(trafficRuntime.lastTileSuccessAt).toISOString()
+      : trafficRuntime.lastRoadSuccessAt
+        ? new Date(trafficRuntime.lastRoadSuccessAt).toISOString()
+        : "",
+    roadUpdatedAt: trafficRuntime.lastRoadSuccessAt ? new Date(trafficRuntime.lastRoadSuccessAt).toISOString() : "",
+    minZoom: 8,
+    tileBudget: budget,
+    attribution: configured
+      ? ["TomTom Traffic", "OpenStreetMap contributors"]
+      : ["OpenStreetMap contributors"],
+  };
+}
+
+async function handleTrafficRoadRequest(requestUrl, response) {
+  const detail = requestUrl.searchParams.get("detail") === "local" ? "local" : "major";
+  let requestedBounds;
+  try {
+    requestedBounds = normalizeTrafficBbox(requestUrl.searchParams.get("bbox"), detail === "local"
+      ? { maxLngSpan: 1.8, maxLatSpan: 1.8, maxArea: 2.2 }
+      : { maxLngSpan: 5.5, maxLatSpan: 4.5, maxArea: 18 });
+  } catch (error) {
+    return sendJson(response, 400, { error: error.message });
+  }
+
+  const quantized = quantizeTrafficBbox(requestedBounds, detail);
+  let bounds;
+  try {
+    bounds = normalizeTrafficBbox(
+      `${quantized.west},${quantized.south},${quantized.east},${quantized.north}`,
+      detail === "local"
+        ? { maxLngSpan: 2, maxLatSpan: 2, maxArea: 2.8 }
+        : { maxLngSpan: 5.8, maxLatSpan: 4.8, maxArea: 20 },
+    );
+  } catch {
+    bounds = requestedBounds;
+  }
+
+  const cacheKey = `traffic-roads:${detail}:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}`;
+  const result = await getCached(cacheKey, 15 * 60 * 1000, async () => {
+    const roads = await fetchOverpassRoads(bounds, detail);
+    trafficRuntime.lastRoadSuccessAt = Date.now();
+    trafficRuntime.lastRoadError = "";
+    return { roads, bounds, source: "OpenStreetMap / Overpass" };
+  }, { staleTtlMs: 7 * 24 * 60 * 60 * 1000 });
+
+  if (!result.ok) {
+    trafficRuntime.lastRoadErrorAt = Date.now();
+    trafficRuntime.lastRoadError = result.message || "OpenStreetMap roads are temporarily unavailable";
+  }
+  const roads = Array.isArray(result.data?.roads) ? result.data.roads : [];
+  return sendJson(response, result.ok ? 200 : 503, {
+    ok: result.ok,
+    generatedAt: new Date().toISOString(),
+    updatedAt: result.updatedAt ? new Date(result.updatedAt).toISOString() : "",
+    cached: Boolean(result.cached),
+    stale: Boolean(result.stale),
+    detail,
+    bounds: result.data?.bounds || bounds,
+    source: result.data?.source || "OpenStreetMap / Overpass",
+    roads,
+    message: result.message || "",
+  });
+}
+
+async function fetchOverpassRoads(bounds, detail) {
+  const query = buildOverpassRoadQuery(bounds, { detail });
+  const body = new URLSearchParams({ data: query }).toString();
+  let lastError = null;
+  for (const endpoint of SOURCE_URLS.overpassRoads) {
+    try {
+      const payload = await fetchJson(endpoint, {
+        method: "POST",
+        timeoutMs: 22000,
+        body,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+          Accept: "application/json",
+        },
+      });
+      return normalizeOverpassRoads(payload, {
+        detail,
+        maxRoads: detail === "local" ? 520 : 420,
+        maxCoordinates: detail === "local" ? 15000 : 12000,
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("OpenStreetMap road query failed");
+}
+
+async function proxyTrafficFlowTile(tile, response) {
+  const apiKey = getConfiguredSecret("tomTomTrafficApiKey", ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"]);
+  if (!apiKey) return sendJson(response, 404, { error: "TomTom traffic flow is not configured" });
+
+  const cacheKey = `${tile.zoom}/${tile.x}/${tile.y}`;
+  const cached = trafficTileCache.get(cacheKey);
+  const now = Date.now();
+  if (cached?.expiresAt > now) {
+    cached.lastAccessAt = now;
+    return sendTrafficTile(response, cached, { cache: "HIT" });
+  }
+  if (!trafficBudget.consume()) {
+    trafficRuntime.lastTileErrorAt = now;
+    trafficRuntime.lastTileError = "The local daily traffic tile ceiling has been reached";
+    return sendJson(response, 429, { error: trafficRuntime.lastTileError, tileBudget: trafficBudget.snapshot() });
+  }
+  saveTrafficBudget();
+
+  const upstreamUrl = new URL(`${SOURCE_URLS.tomTomTrafficFlow}/${tile.zoom}/${tile.x}/${tile.y}.png`);
+  upstreamUrl.searchParams.set("key", apiKey);
+  upstreamUrl.searchParams.set("tileSize", "256");
+  try {
+    const upstream = await fetch(upstreamUrl, {
+      headers: {
+        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+        Accept: "image/png, application/json;q=0.8",
+      },
+      signal: AbortSignal.timeout(9000),
+    });
+    if (!upstream.ok) throw new Error(`TomTom Traffic returned ${upstream.status}`);
+    const contentType = upstream.headers.get("content-type") || "";
+    if (!/^image\/png/i.test(contentType)) throw new Error(`TomTom Traffic returned ${contentType || "an unexpected response"}`);
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (!buffer.length || buffer.length > 2 * 1024 * 1024) throw new Error("TomTom Traffic tile size was invalid");
+    const entry = {
+      buffer,
+      contentType: "image/png",
+      updatedAt: now,
+      expiresAt: now + 75 * 1000,
+      lastAccessAt: now,
+    };
+    trafficTileCache.set(cacheKey, entry);
+    pruneTrafficTileCache();
+    trafficRuntime.lastTileSuccessAt = now;
+    trafficRuntime.lastTileError = "";
+    return sendTrafficTile(response, entry, { cache: "MISS" });
+  } catch (error) {
+    trafficRuntime.lastTileErrorAt = now;
+    trafficRuntime.lastTileError = error.message;
+    if (cached?.buffer && now - cached.updatedAt < 10 * 60 * 1000) {
+      return sendTrafficTile(response, cached, { cache: "STALE", stale: true });
+    }
+    return sendJson(response, 502, { error: "Live traffic tile unavailable", message: error.message });
+  }
+}
+
+function sendTrafficTile(response, entry, options = {}) {
+  response.writeHead(200, {
+    "Content-Type": entry.contentType || "image/png",
+    "Content-Length": entry.buffer.length,
+    "Cache-Control": options.stale ? "public, max-age=15" : "public, max-age=60",
+    "X-Oversee-Traffic-Cache": options.cache || "MISS",
+    "X-Oversee-Traffic-Updated": new Date(entry.updatedAt).toISOString(),
+    "X-Oversee-Traffic-Stale": options.stale ? "true" : "false",
+  });
+  response.end(entry.buffer);
+}
+
+function pruneTrafficTileCache() {
+  if (trafficTileCache.size <= 900) return;
+  const oldest = [...trafficTileCache.entries()]
+    .sort((left, right) => (left[1].lastAccessAt || 0) - (right[1].lastAccessAt || 0))
+    .slice(0, trafficTileCache.size - 800);
+  for (const [key] of oldest) trafficTileCache.delete(key);
+}
+
+function trafficBudgetPath() {
+  return path.join(RUNTIME_CACHE_DIR, "traffic-tile-budget.json");
+}
+
+function loadTrafficBudget() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(trafficBudgetPath(), "utf8"));
+    return new DailyTrafficBudget({ limit: 5000, day: saved.day, used: saved.used });
+  } catch {
+    return new DailyTrafficBudget({ limit: 5000 });
+  }
+}
+
+function saveTrafficBudget() {
+  try {
+    fs.mkdirSync(RUNTIME_CACHE_DIR, { recursive: true });
+    fs.writeFileSync(trafficBudgetPath(), `${JSON.stringify(trafficBudget.snapshot(), null, 2)}\n`);
+  } catch {
+    // The budget remains enforced in memory if the resilience file cannot be written.
+  }
 }
 
 function fetchLegacyJson(url, options = {}) {
@@ -4198,7 +4457,7 @@ function fetchLegacyResource(url, options = {}) {
     const request = https.request(url, {
       method: options.method || "GET",
       headers: {
-        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
         Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
         ...(body ? { "Content-Length": body.length } : {}),
         ...(options.headers || {}),
@@ -4254,7 +4513,7 @@ async function proxyGibsTexture(requestUrl, response) {
   const result = await getCached(cacheKey, 6 * 60 * 60 * 1000, async () => {
     const upstream = await fetch(gibsUrl, {
       headers: {
-        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
         Accept: `${view.format}, image/*;q=0.9, */*;q=0.5`,
       },
       signal: AbortSignal.timeout(14000),
@@ -4400,6 +4659,11 @@ function isSameOriginLocalRequest(request) {
   }
 }
 
+function isLocalResourceRequest(request) {
+  if (String(request.headers["sec-fetch-site"] || "").toLowerCase() === "cross-site") return false;
+  return isSameOriginLocalRequest(request);
+}
+
 function readJsonBody(request) {
   return new Promise((resolve, reject) => {
     let body = "";
@@ -4426,6 +4690,12 @@ function readJsonBody(request) {
 const USER_SETTING_FIELDS = [
   { key: "nasaFirmsMapKey", label: "NASA FIRMS map key", env: ["NASA_FIRMS_MAP_KEY", "FIRMS_MAP_KEY"] },
   { key: "openskyToken", label: "OpenSky API token", env: ["OPENSKY_TOKEN"] },
+  {
+    key: "tomTomTrafficApiKey",
+    label: "TomTom Traffic API key",
+    env: ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"],
+    description: "Optional. Enables observed congestion colors; without it, Oversee clearly labels an OpenStreetMap time-of-day model.",
+  },
   { key: "googleMapsApiKey", label: "Google Maps / 3D Tiles key", env: ["GOOGLE_MAPS_API_KEY", "GOOGLE_EARTH_API_KEY"] },
   { key: "flightradar24ApiKey", label: "Flightradar24 API key", env: ["FLIGHTRADAR24_API_KEY", "FR24_API_KEY"] },
   { key: "cesiumIonToken", label: "Cesium ion token", env: ["CESIUM_ION_TOKEN"] },
@@ -4450,6 +4720,7 @@ function publicSettings() {
       local: Boolean(USER_CONFIG[field.key]),
       bundled: Boolean(BUNDLED_CONFIG[field.key]),
       env: field.env.some((name) => Boolean(process.env[name])),
+      description: field.description || "",
     })),
   };
 }
@@ -4469,6 +4740,10 @@ function updateLocalSettings(payload = {}) {
   USER_CONFIG.updatedAt = new Date().toISOString();
   saveLocalConfig();
   cache.clear();
+  trafficTileCache.clear();
+  trafficRuntime.lastTileSuccessAt = 0;
+  trafficRuntime.lastTileErrorAt = 0;
+  trafficRuntime.lastTileError = "";
   configureAisCollector();
   return publicSettings();
 }
