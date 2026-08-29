@@ -180,7 +180,7 @@
           <section class="panel top-assets" id="assets">
             <div class="section-head">
               <div>
-                <h2>Tracked Assets</h2>
+                <h2>Visible Assets</h2>
                 <p>Visible signal samples from active layers, plus anything you pin.</p>
               </div>
               <div class="section-actions">
@@ -194,8 +194,8 @@
           <section class="panel region-summary">
             <div class="section-head">
               <div>
-                <h2>Region Summary</h2>
-                <p>Highest-volume regions in the currently loaded data.</p>
+                <h2>Activity Summary</h2>
+                <p>Highest-volume regions and signal groups in the loaded data.</p>
               </div>
               <div class="section-actions">
                 <button class="text-button" type="button" data-collapse-panel="regions">Collapse</button>
@@ -208,8 +208,8 @@
           <section class="panel alert-summary">
             <div class="section-head">
               <div>
-                <h2>Alert Summary</h2>
-                <p>Severity mix for alert and hazard signals.</p>
+                <h2>Hazard Summary</h2>
+                <p>Severity mix across alerts, earthquakes, and fire signals.</p>
               </div>
               <div class="section-actions">
                 <strong id="alertTotal">0</strong>
@@ -407,8 +407,6 @@
       window.CESIUM_BASE_URL = "https://unpkg.com/cesium@1.123.1/Build/Cesium/";
     </script>
     <script src="https://unpkg.com/cesium@1.123.1/Build/Cesium/Cesium.js"></script>
-    <script src="./assets/data.js"></script>
-    <script src="./assets/feed-meta.js"></script>
-    <script src="./assets/app.js"></script>
+    <script type="module" src="./assets/app.js"></script>
   </body>
 </html>

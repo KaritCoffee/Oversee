@@ -1,17 +1,24 @@
 {
   "name": "oversee",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "private": true,
   "description": "Oversee public geospatial dashboard",
   "scripts": {
     "start": "node server.js",
-    "check": "node --check server.js && node --check assets/app.js",
-    "predesktop:build": "node scripts/prepare-runtime.js",
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build",
+    "test": "node --test src/**/*.test.mjs server-src/**/*.test.cjs",
+    "check": "node --check server.js && npm run test && npm run build",
+    "predesktop:build": "npm run build && node scripts/prepare-runtime.js",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",
     "desktop:info": "tauri info"
   },
+  "dependencies": {
+    "satellite.js": "^6.0.2"
+  },
   "devDependencies": {
-    "@tauri-apps/cli": "2.11.0"
+    "@tauri-apps/cli": "2.11.0",
+    "vite": "^6.1.0"
   }
 }

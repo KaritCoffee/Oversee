@@ -1,12 +1,26 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
+const https = require("node:https");
 const vm = require("node:vm");
+const { AisCollector } = require("./server-src/ais-collector.js");
+const { fetchLaunchLibrary } = require("./server-src/launch-library.js");
+const { fetchRadioStations } = require("./server-src/radio-browser.js");
+const { satnogsRecordToGp } = require("./server-src/satellite-fallback.js");
+const { parseCensusPopulationCsv } = require("./server-src/census-population.js");
+const { RemoteMediaPolicy } = require("./server-src/remote-media-policy.js");
 
 const ROOT = __dirname;
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "3.0.0";
+const BUILT_FRONTEND_ROOT = path.join(ROOT, "dist");
+const STATIC_ROOT = process.env.OVERSEE_STATIC_ROOT
+  ? path.resolve(process.env.OVERSEE_STATIC_ROOT)
+  : fs.existsSync(path.join(BUILT_FRONTEND_ROOT, "index.html"))
+    ? BUILT_FRONTEND_ROOT
+    : ROOT;
 const REQUESTED_PORT = Number(process.env.PORT || 4173);
 const FALLBACK_PORTS = process.env.PORT ? [REQUESTED_PORT] : [4173, 4183, 4193, 4203, 4303];
+const MEDIA_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36";
 const DATA = loadBrowserExport(path.join(ROOT, "assets", "data.js"), "OVERSEE_DATA");
 const META = loadBrowserExport(path.join(ROOT, "assets", "feed-meta.js"), "OVERSEE_FEED_META");
 const USER_CONFIG_PATH = process.env.OVERSEE_USER_CONFIG_PATH || path.join(process.env.LOCALAPPDATA || ROOT, "Oversee", "config.local.json");
@@ -32,6 +46,7 @@ const MIME_TYPES = {
 const SOURCE_URLS = {
   celestrakActive: "https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=json",
   celestrakVisual: "https://celestrak.org/NORAD/elements/gp.php?GROUP=visual&FORMAT=json",
+  satnogsTle: "https://db.satnogs.org/api/tle/?format=json",
   openskyAll: "https://opensky-network.org/api/states/all",
   adsbLolPoint: "https://api.adsb.lol/v2/point",
   usgsQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
@@ -43,6 +58,10 @@ const SOURCE_URLS = {
   egpIncidents: "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/EGP_Active_Incidents_Prod_Public_View/FeatureServer/0/query",
   egpPerimeters: "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0/query",
   censusAcsStatePopulation: "https://api.census.gov/data/2023/acs/acs5",
+  censusPopulationEstimateCsv: [
+    "https://www2.census.gov/programs-surveys/popest/datasets/2020-2025/state/totals/NST-EST2025-ALLDATA.csv",
+    "https://www2.census.gov/programs-surveys/popest/datasets/2020-2024/state/totals/NST-EST2024-ALLDATA.csv",
+  ],
   nycTrafficCameras: "https://webcams.nyctmc.org/api/cameras",
   tflJamCams: "https://api.tfl.gov.uk/Place/Type/JamCam",
   nasaGibsWms: "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi",
@@ -63,7 +82,9 @@ const SOURCE_URLS = {
   austinTrafficCameras: "https://data.austintexas.gov/resource/b4k4-adkb.json",
   singaporeTrafficImages: "https://api.data.gov.sg/v1/transport/traffic-images",
   nztaTrafficCameras: "https://trafficnz.info/service/traffic/rest/4/cameras/all",
-  nswTrafficCameras: "https://api.transport.nsw.gov.au/v1/live/cameras",
+  nswTrafficCameras: "https://data.livetraffic.com/cameras/traffic-cam.json",
+  nswTrafficCamerasApi: "https://api.transport.nsw.gov.au/v1/live/cameras",
+  puertoRicoTrafficCameras: "https://its.act.pr.gov/en/Default.aspx/GetCctv",
   wisconsin511Cameras: "https://511wi.gov/api/v2/get/cameras",
   louisiana511Cameras: "https://511la.org/api/v2/get/cameras",
   driveNcCameras: "https://nc.prod.traveliq.co/api/v2/get/cameras",
@@ -317,10 +338,10 @@ const CURATED_PUBLIC_CAMERAS = [
 ];
 
 const SCOPE_BOUNDS = {
-  world: { label: "Global", lamin: -70, lamax: 82, lomin: -180, lomax: 180, limit: 1800, flightLimit: 5000, satelliteLimit: 5000, quakeLimit: 2000, fireLimit: 3000 },
-  us: { label: "United States", lamin: 18.0, lamax: 72.5, lomin: -170.0, lomax: -52.0, limit: 1400, flightLimit: 2200, satelliteLimit: 2500, quakeLimit: 1500, fireLimit: 2200 },
-  west: { label: "US West", lamin: 31.0, lamax: 49.8, lomin: -125.6, lomax: -102.0, limit: 900, flightLimit: 900, satelliteLimit: 1400, quakeLimit: 900, fireLimit: 1200 },
-  oregon: { label: "Oregon", lamin: 41.8, lamax: 46.4, lomin: -124.9, lomax: -116.3, limit: 320, flightLimit: 420, satelliteLimit: 700, quakeLimit: 500, fireLimit: 700 },
+  world: { label: "Global", lamin: -70, lamax: 82, lomin: -180, lomax: 180, limit: 1800, flightLimit: 5000, satelliteLimit: 5000, quakeLimit: 2000, fireLimit: 3000, vesselLimit: 6000, radioLimit: 900 },
+  us: { label: "United States", lamin: 18.0, lamax: 72.5, lomin: -170.0, lomax: -52.0, limit: 1400, flightLimit: 2200, satelliteLimit: 2500, quakeLimit: 1500, fireLimit: 2200, vesselLimit: 2200, radioLimit: 500 },
+  west: { label: "US West", lamin: 31.0, lamax: 49.8, lomin: -125.6, lomax: -102.0, limit: 900, flightLimit: 900, satelliteLimit: 1400, quakeLimit: 900, fireLimit: 1200, vesselLimit: 900, radioLimit: 250 },
+  oregon: { label: "Oregon", lamin: 41.8, lamax: 46.4, lomin: -124.9, lomax: -116.3, limit: 320, flightLimit: 420, satelliteLimit: 700, quakeLimit: 500, fireLimit: 700, vesselLimit: 320, radioLimit: 120 },
 };
 
 const CENSUS_STATE_CENTROIDS = {
@@ -664,6 +685,8 @@ const FALLBACK_STILL_URLS = {
 };
 
 const cache = new Map();
+const aisCollector = new AisCollector();
+const remoteMediaPolicy = new RemoteMediaPolicy();
 let serverPort = REQUESTED_PORT;
 
 const server = http.createServer(async (request, response) => {
@@ -701,10 +724,30 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, data);
     }
 
+    if (requestUrl.pathname === "/api/launches") {
+      const result = await getCached("launches:rolling-30d", 15 * 60 * 1000, () => fetchLaunchLibrary({
+        fetchJson,
+        token: getConfiguredSecret("launchLibraryToken", ["LL2_API_TOKEN"]),
+      }));
+      return sendJson(response, result.ok ? 200 : 503, result);
+    }
+
+    if (requestUrl.pathname === "/api/radio-stations") {
+      const result = await getCached("radio:global", 6 * 60 * 60 * 1000, () => fetchRadioStations({ fetchJson }));
+      return sendJson(response, result.ok ? 200 : 503, result);
+    }
+
+    if (requestUrl.pathname === "/api/vessels") {
+      configureAisCollector();
+      return sendJson(response, 200, aisCollector.snapshot());
+    }
+
     if (requestUrl.pathname === "/api/feed-view") {
       const feedId = requestUrl.searchParams.get("id");
       if (!feedId) return sendJson(response, 400, { error: "Missing feed id" });
-      return sendJson(response, 200, await resolveFeedView(feedId));
+      const view = await resolveFeedView(feedId);
+      if (view?.type === "image") remoteMediaPolicy.remember(view.url);
+      return sendJson(response, 200, view);
     }
 
     if (requestUrl.pathname === "/api/demo-feeds") {
@@ -730,7 +773,8 @@ listenOnPreferredPort(0);
 
 async function buildIntelSnapshot(scope) {
   const bounds = SCOPE_BOUNDS[scope];
-  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, nhcResult, cubaReportResult, fireResult, egpIncidentResult, egpPerimeterResult, censusResult] = await Promise.all([
+  configureAisCollector();
+  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, nhcResult, cubaReportResult, fireResult, egpIncidentResult, egpPerimeterResult, censusResult, launchResult, radioResult] = await Promise.all([
     buildCameraSet(scope),
     getCached("satellites", 10 * 60 * 1000, () => fetchSatellites(scope)),
     getCached(`flights:${scope}`, 10 * 60 * 1000, () => fetchFlights(scope)),
@@ -742,7 +786,13 @@ async function buildIntelSnapshot(scope) {
     getCached("egp:incidents", 5 * 60 * 1000, () => fetchEgpIncidents()),
     getCached("egp:perimeters", 10 * 60 * 1000, () => fetchEgpPerimeters()),
     getCached("census:state-population", 24 * 60 * 60 * 1000, () => fetchCensusDemographics()),
+    getCached("launches:rolling-30d", 15 * 60 * 1000, () => fetchLaunchLibrary({
+      fetchJson,
+      token: getConfiguredSecret("launchLibraryToken", ["LL2_API_TOKEN"]),
+    }), { staleTtlMs: 7 * 24 * 60 * 60 * 1000 }),
+    getCached("radio:global", 6 * 60 * 60 * 1000, () => fetchRadioStations({ fetchJson }), { staleTtlMs: 14 * 24 * 60 * 60 * 1000 }),
   ]);
+  const vesselResult = aisCollector.snapshot();
 
   const cameras = cameraSet.data;
   const satellites = filterGeoItems(satelliteResult.data, bounds).slice(0, bounds.satelliteLimit || bounds.limit);
@@ -756,12 +806,16 @@ async function buildIntelSnapshot(scope) {
   const alerts = sortAlertsForDisplay([...nwsAlerts, ...nhcAlerts, ...cubaReportAlerts, ...referenceAlerts]).slice(0, 100);
   const fires = filterGeoItems([...(fireResult.data || []), ...(egpIncidentResult.data || []), ...(egpPerimeterResult.data || [])], bounds).slice(0, bounds.fireLimit || 1800);
   const demographics = filterGeoItems(censusResult.data || [], bounds).slice(0, 80);
+  const vessels = filterGeoItems(vesselResult.data || [], bounds).slice(0, bounds.vesselLimit || 3000);
+  const launches = filterGeoItems(launchResult.data || [], bounds).slice(0, 100);
+  const radio = filterGeoItems(radioResult.data || [], bounds).slice(0, bounds.radioLimit || 900);
   const events = buildEvents({ cameras, satellites, flights, quakes, alerts, fires });
   const regions = buildRegions({ cameras, satellites, flights, quakes, alerts, fires });
   const severity = buildSeverity({ alerts, quakes, fires });
+  rememberProxyImageHosts(quakes);
   const sourceHealth = [
     ...cameraSet.health,
-    healthFromResult("CelesTrak GP", satelliteResult, satellites.length),
+    healthFromResult("Orbital elements (CelesTrak / SatNOGS)", satelliteResult, satellites.length),
     healthFromResult("Aircraft states", flightResult, flights.length),
     healthFromResult("USGS quakes", quakeResult, quakes.length),
     healthFromResult("NWS alerts", alertResult, nwsAlerts.length),
@@ -771,7 +825,14 @@ async function buildIntelSnapshot(scope) {
     healthFromResult("NASA FIRMS fires", fireResult, filterGeoItems(fireResult.data || [], bounds).length),
     healthFromResult("EGP WildFireSA incidents", egpIncidentResult, filterGeoItems(egpIncidentResult.data || [], bounds).length),
     healthFromResult("WFIGS current perimeters", egpPerimeterResult, filterGeoItems(egpPerimeterResult.data || [], bounds).length),
-    healthFromResult("Census ACS population", censusResult, demographics.length),
+    healthFromResult("Census population estimates", censusResult, demographics.length),
+    healthFromResult("Launch Library 2", launchResult, launches.length, { optional: true, staleAfterMs: 60 * 60 * 1000 }),
+    healthFromResult("Radio Browser", radioResult, radio.length, { optional: true, staleAfterMs: 24 * 60 * 60 * 1000 }),
+    healthFromResult("AISStream vessels", vesselResult, vessels.length, {
+      optional: true,
+      configured: vesselResult.configured,
+      staleAfterMs: 2 * 60 * 1000,
+    }),
   ];
   const videoFeeds = cameras.filter((camera) => camera.capability === "player" || camera.capability === "stream").length;
 
@@ -786,20 +847,35 @@ async function buildIntelSnapshot(scope) {
     alerts,
     fires,
     demographics,
+    vessels,
+    launches,
+    radio,
     traffic: [],
     events,
     regions,
     severity,
     sourceHealth,
     metrics: {
-      eventsToday: cameras.length + satellites.length + flights.length + quakes.length + alerts.length + fires.length + demographics.length,
+      eventsToday: cameras.length + satellites.length + flights.length + quakes.length + alerts.length + fires.length + demographics.length + vessels.length + launches.length + radio.length,
       alerts: alerts.length,
-      assets: cameras.length + satellites.length + flights.length + fires.length,
+      assets: cameras.length + satellites.length + flights.length + fires.length + vessels.length + launches.length,
       fires: fires.length,
       demographics: demographics.length,
       cameraFeeds: cameras.length,
       videoFeeds,
       streams: sourceHealth.filter((source) => source.ok).length,
+      vessels: vessels.length,
+      launches: launches.length,
+      radio: radio.length,
+    },
+    refreshPolicy: {
+      snapshotSeconds: 60,
+      flightsSeconds: 600,
+      satellitesSeconds: 600,
+      camerasSeconds: 120,
+      launchesSeconds: 900,
+      radioSeconds: 21600,
+      vesselsSeconds: 15,
     },
   };
 }
@@ -823,6 +899,7 @@ async function buildCameraSet(scope = "world") {
     .sort(compareCameras);
 
   rememberDynamicCameras(cameras);
+  rememberProxyImageHosts(cameras);
   return { data: cameras, health: sourceHealth };
 }
 
@@ -1287,20 +1364,25 @@ function cameraAdapterSpecs(scope) {
         tags: ["ontario", "511", "mto", "canada", "traffic"],
       }),
     });
-    adapters.push({
-      key: "cameras:alberta-511",
-      name: "Alberta 511 Cameras",
-      ttlMs: 2 * 60 * 1000,
-      fetcher: () => fetchV2RoadCameras({
-        idPrefix: "ab511",
-        sourceName: "Alberta 511 Cameras",
-        url: SOURCE_URLS.alberta511Cameras,
-        officialUrl: "https://511.alberta.ca/",
-        region: "Alberta",
-        country: "Canada",
-        tags: ["alberta", "511", "canada", "traffic"],
-      }),
-    });
+    const albertaKey = getConfiguredSecret("alberta511ApiKey", ["ALBERTA_511_API_KEY", "AB511_API_KEY"]);
+    if (albertaKey) {
+      const albertaUrl = new URL(SOURCE_URLS.alberta511Cameras);
+      albertaUrl.searchParams.set("key", albertaKey);
+      adapters.push({
+        key: "cameras:alberta-511",
+        name: "Alberta 511 Cameras",
+        ttlMs: 10 * 60 * 1000,
+        fetcher: () => fetchV2RoadCameras({
+          idPrefix: "ab511",
+          sourceName: "Alberta 511 Cameras",
+          url: albertaUrl.href,
+          officialUrl: "https://511.alberta.ca/",
+          region: "Alberta",
+          country: "Canada",
+          tags: ["alberta", "511", "canada", "traffic"],
+        }),
+      });
+    }
     adapters.push({
       key: "cameras:fintraffic-weathercams",
       name: "Fintraffic Weather Cameras",
@@ -1338,14 +1420,18 @@ function cameraAdapterSpecs(scope) {
       fetcher: fetchNztaTrafficCameras,
     });
     const nswKey = getConfiguredSecret("nswTransportApiKey", ["NSW_TRANSPORT_API_KEY", "TRANSPORT_NSW_API_KEY"]);
-    if (nswKey) {
-      adapters.push({
-        key: "cameras:nsw-live-traffic",
-        name: "NSW Live Traffic Cameras",
-        ttlMs: 10 * 60 * 1000,
-        fetcher: () => fetchNswTrafficCameras(nswKey),
-      });
-    }
+    adapters.push({
+      key: "cameras:nsw-live-traffic",
+      name: "NSW Live Traffic Cameras",
+      ttlMs: 10 * 60 * 1000,
+      fetcher: () => fetchNswTrafficCameras(nswKey),
+    });
+    adapters.push({
+      key: "cameras:puerto-rico-act",
+      name: "Puerto Rico ACT Traffic Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: fetchPuertoRicoTrafficCameras,
+    });
   }
   if (scope === "world" || scope === "us" || scope === "west") {
     adapters.push({
@@ -1371,6 +1457,19 @@ function cameraAdapterSpecs(scope) {
 function rememberDynamicCameras(cameras) {
   for (const camera of cameras) {
     if (camera.dynamic) DYNAMIC_CAMERAS_BY_ID.set(camera.id, camera);
+  }
+}
+
+function rememberProxyImageHosts(items) {
+  for (const item of items || []) {
+    for (const value of [
+      item?.imageUrl,
+      item?.previewUrl,
+      item?.shakeMap?.intensityMap,
+      item?.shakeMap?.pgaMap,
+    ]) {
+      if (value) remoteMediaPolicy.remember(value);
+    }
   }
 }
 
@@ -2164,9 +2263,10 @@ async function fetchTravelIqCameras(source) {
 }
 
 async function fetchNswTrafficCameras(apiKey) {
-  const data = await fetchJson(SOURCE_URLS.nswTrafficCameras, {
+  const sourceUrl = apiKey ? SOURCE_URLS.nswTrafficCamerasApi : SOURCE_URLS.nswTrafficCameras;
+  const data = await fetchJson(sourceUrl, {
     timeoutMs: 18000,
-    headers: { Authorization: `apikey ${apiKey}` },
+    headers: apiKey ? { Authorization: `apikey ${apiKey}` } : undefined,
   });
   const features = Array.isArray(data.features) ? data.features : [];
   return features
@@ -2194,11 +2294,65 @@ async function fetchNswTrafficCameras(apiKey) {
         tags: ["australia", "new-south-wales", "nsw", "transport-nsw", "traffic", area].filter(Boolean),
         sourceId: "nsw-live-traffic",
         sourceName: "NSW Live Traffic Cameras",
-        sourceUrl: SOURCE_URLS.nswTrafficCameras,
+        sourceUrl,
         officialUrl: "https://opendata.transport.nsw.gov.au/",
         sourcePageUrl: "https://opendata.transport.nsw.gov.au/",
         lat: Number(lat),
         lng: Number(lng),
+        viewerType: "image",
+        capability: "snapshot",
+        capabilityLabel: "Current Still",
+        previewUrl: imageUrl,
+        imageUrl,
+        refreshSeconds: 120,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function fetchPuertoRicoTrafficCameras() {
+  const data = await fetchLegacyJson(SOURCE_URLS.puertoRicoTrafficCameras, {
+    method: "POST",
+    body: "{}",
+    timeoutMs: 18000,
+    headers: {
+      "Content-Type": "application/json;charset=utf-8",
+      Origin: "https://its.act.pr.gov",
+      Referer: "https://its.act.pr.gov/en/Default.aspx",
+    },
+  });
+  const records = Array.isArray(data?.d?.Cctv) ? data.d.Cctv : [];
+  return records
+    .map((record) => {
+      const lat = Number(record.Latitude);
+      const lng = Number(record.Longitude);
+      const imageUrl = normalizeUrl(record.ImageUrl, "https://its.act.pr.gov");
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !imageUrl) return null;
+      const name = cleanCameraText(record.Name || record.LocationEn || "Puerto Rico traffic camera");
+      const area = cleanCameraText(record.LocationEn || record.LocationEs || "San Juan metro");
+      const sourcePageUrl = `https://its.act.pr.gov/en/TrafficImage.aspx?Large=1&id=${encodeURIComponent(record.Id)}`;
+      return {
+        id: `pr-act-${slugify(record.Id || name)}`,
+        dynamic: true,
+        type: "camera",
+        name,
+        shortName: shortCameraName(name),
+        area,
+        region: "Puerto Rico",
+        county: "San Juan metro",
+        country: "Puerto Rico",
+        category: "traffic",
+        media: "still",
+        status: "Online",
+        freshness: 2,
+        tags: ["puerto-rico", "caribbean", "act", "dtop", "traffic", area],
+        sourceId: "puerto-rico-act",
+        sourceName: "Puerto Rico ACT Traffic Cameras",
+        sourceUrl: SOURCE_URLS.puertoRicoTrafficCameras,
+        officialUrl: "https://its.act.pr.gov/en/TrafficCameras.aspx",
+        sourcePageUrl,
+        lat,
+        lng,
         viewerType: "image",
         capability: "snapshot",
         capabilityLabel: "Current Still",
@@ -2394,10 +2548,15 @@ function firstFieldValue(attributes, fields = []) {
   return "";
 }
 
-function normalizeUrl(value) {
+function normalizeUrl(value, baseUrl = undefined) {
   const text = cleanCameraText(value);
-  if (!/^https?:\/\//i.test(text)) return "";
-  return text;
+  if (!text) return "";
+  try {
+    const url = baseUrl ? new URL(text, baseUrl) : new URL(text);
+    return /^https?:$/.test(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
 }
 
 function firstRegex(text, pattern) {
@@ -2555,7 +2714,7 @@ async function verifyKnownEmbedPlayer(view) {
   const result = await getCached(`embed:${view.url}`, 2 * 60 * 1000, async () => {
     const response = await fetch(view.url, {
       headers: {
-        "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
       },
       signal: AbortSignal.timeout(8000),
@@ -2771,7 +2930,7 @@ async function verifyHlsPlaylist(url) {
   const result = await getCached(`hls:${url}`, 5 * 60 * 1000, async () => {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
         Accept: "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.9, */*;q=0.8",
       },
       signal: AbortSignal.timeout(7000),
@@ -2789,7 +2948,7 @@ async function verifyVideoAsset(url) {
   const result = await getCached(`video:${url}`, 5 * 60 * 1000, async () => {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
         Accept: "video/*,*/*;q=0.8",
         Range: "bytes=0-1",
       },
@@ -2809,9 +2968,13 @@ async function verifyVideoAsset(url) {
 async function fetchSatellites(scope) {
   let records;
   try {
-    records = await fetchJson(SOURCE_URLS.celestrakActive, { timeoutMs: 25000 });
+    records = await fetchJson(SOURCE_URLS.celestrakActive, { timeoutMs: 18000 });
   } catch {
-    records = await fetchCelesTrakFallbackGroups();
+    try {
+      records = await fetchSatnogsTles();
+    } catch {
+      records = await fetchCelesTrakFallbackGroups();
+    }
   }
 
   const now = Date.now();
@@ -2819,6 +2982,11 @@ async function fetchSatellites(scope) {
   return deterministicSample(records || [], maxSource, "NORAD_CAT_ID")
     .map((record) => deriveSatellite(record, now))
     .filter(Boolean);
+}
+
+async function fetchSatnogsTles() {
+  const records = await fetchJson(SOURCE_URLS.satnogsTle, { timeoutMs: 22000 });
+  return (Array.isArray(records) ? records : []).map(satnogsRecordToGp).filter(Boolean);
 }
 
 async function fetchCelesTrakFallbackGroups() {
@@ -2871,10 +3039,36 @@ function deriveSatellite(record, now) {
     altitudeKm,
     inclination,
     periodMinutes,
-    source: "CelesTrak GP",
+    source: record.DATA_SOURCE || "CelesTrak GP",
     displayColor: satelliteColor(objectType),
+    orbitalElements: orbitalElementsFromRecord(record),
     orbit,
   };
+}
+
+function orbitalElementsFromRecord(record) {
+  const fields = [
+    "OBJECT_NAME",
+    "OBJECT_ID",
+    "EPOCH",
+    "MEAN_MOTION",
+    "ECCENTRICITY",
+    "INCLINATION",
+    "RA_OF_ASC_NODE",
+    "ARG_OF_PERICENTER",
+    "MEAN_ANOMALY",
+    "EPHEMERIS_TYPE",
+    "CLASSIFICATION_TYPE",
+    "NORAD_CAT_ID",
+    "ELEMENT_SET_NO",
+    "REV_AT_EPOCH",
+    "BSTAR",
+    "MEAN_MOTION_DOT",
+    "MEAN_MOTION_DDOT",
+    "TLE_LINE1",
+    "TLE_LINE2",
+  ];
+  return Object.fromEntries(fields.map((field) => [field, record[field]]));
 }
 
 function orbitalPoint(angle, inclination, raan, argPerigee, now) {
@@ -3054,11 +3248,22 @@ function mapAdsbLolAircraft(aircraft) {
 }
 
 async function fetchCensusDemographics() {
+  for (const sourceUrl of SOURCE_URLS.censusPopulationEstimateCsv) {
+    try {
+      const csv = await fetchText(sourceUrl, { timeoutMs: 15000, accept: "text/csv, text/plain;q=0.9, */*;q=0.5" });
+      const records = parseCensusPopulationCsv(csv, CENSUS_STATE_CENTROIDS);
+      if (records.length) return records.map(mapCensusPopulationEstimate);
+    } catch {
+      // Try the prior official vintage, then the keyed ACS API if configured.
+    }
+  }
+
   const url = new URL(SOURCE_URLS.censusAcsStatePopulation);
   url.searchParams.set("get", "NAME,B01003_001E");
   url.searchParams.set("for", "state:*");
   const censusApiKey = getConfiguredSecret("censusApiKey", ["CENSUS_API_KEY"]);
-  if (censusApiKey) url.searchParams.set("key", censusApiKey);
+  if (!censusApiKey) throw new Error("Census public estimate files and keyed API were unavailable");
+  url.searchParams.set("key", censusApiKey);
 
   const rows = await fetchJson(url.toString(), { timeoutMs: 12000 });
   const [header, ...records] = Array.isArray(rows) ? rows : [];
@@ -3093,6 +3298,27 @@ async function fetchCensusDemographics() {
     })
     .filter(Boolean)
     .sort((left, right) => right.population - left.population);
+}
+
+function mapCensusPopulationEstimate(record) {
+  const { fips, name, population, vintage, centroid } = record;
+  return {
+    id: `census-state-${fips}`,
+    type: "demographic",
+    name,
+    title: `${name} population`,
+    area: centroid.code,
+    region: "United States",
+    lat: centroid.lat,
+    lng: centroid.lng,
+    population,
+    populationLabel: population.toLocaleString("en-US"),
+    source: `U.S. Census Population Estimates ${vintage}`,
+    sourceUrl: "https://www.census.gov/programs-surveys/popest.html",
+    dataset: `July 1, ${vintage} resident population estimate`,
+    displayColor: "#39d98a",
+    radiusKm: populationToRadius(population),
+  };
 }
 
 function populationToRadius(population) {
@@ -3744,15 +3970,15 @@ function buildRegions({ cameras, satellites, flights, quakes, alerts, fires }) {
   for (const camera of cameras) addRegion(buckets, camera.region || camera.area, 1);
   for (const satellite of satellites) addRegion(buckets, satellite.objectType || "Orbit", 1);
   for (const flight of flights) addRegion(buckets, flight.country || "Aircraft", 1);
-  for (const quake of quakes) addRegion(buckets, "Seismic", Math.max(1, Math.round(quake.magnitude || 1)));
-  for (const alert of alerts) addRegion(buckets, alert.area || "Alerts", 2);
-  for (const fire of fires) addRegion(buckets, "Fire Hotspots", Math.max(1, Math.ceil((fire.frp || 1) / 25)));
+  for (const quake of quakes) addRegion(buckets, "Seismic", 1);
+  for (const alert of alerts) addRegion(buckets, alert.area || "Alerts", 1);
+  for (const fire of fires) addRegion(buckets, "Fire Hotspots", 1);
 
   return Array.from(buckets, ([name, total], index) => ({
     name,
     total,
     color: ["#19e2ff", "#b85cff", "#ffb02e", "#18f0a0", "#ff4e57", "#ff7a1a"][index % 6],
-    delta: total > 20 ? "+ hot" : "+ live",
+    delta: "+ loaded",
   }))
     .sort((left, right) => right.total - left.total)
     .slice(0, 12);
@@ -3917,6 +4143,9 @@ function healthFromResult(name, result, count, options = {}) {
     cached: result.cached,
     stale: result.stale || false,
     optional: Boolean(options.optional),
+    configured: options.configured ?? true,
+    updatedAt: result.updatedAt ? new Date(result.updatedAt).toISOString() : "",
+    staleAfterMs: Number(options.staleAfterMs || 0),
     message: result.message || "",
   };
 }
@@ -3925,7 +4154,7 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+      "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
       Accept: "application/geo+json, application/json, text/plain;q=0.9, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -3941,7 +4170,7 @@ async function fetchText(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+      "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
       Accept: options.accept || "text/plain, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -3951,6 +4180,56 @@ async function fetchText(url, options = {}) {
 
   if (!response.ok) throw new Error(`${new URL(url).hostname} returned ${response.status}`);
   return response.text();
+}
+
+function fetchLegacyJson(url, options = {}) {
+  return fetchLegacyResource(url, options).then(({ buffer }) => {
+    try {
+      return JSON.parse(buffer.toString("utf8"));
+    } catch (error) {
+      throw new Error(`Legacy JSON parse failed: ${error.message}`);
+    }
+  });
+}
+
+function fetchLegacyResource(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const body = options.body ? Buffer.from(options.body) : null;
+    const request = https.request(url, {
+      method: options.method || "GET",
+      headers: {
+        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
+        Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
+        ...(body ? { "Content-Length": body.length } : {}),
+        ...(options.headers || {}),
+      },
+      // The Puerto Rico ACT server emits whitespace that strict Node fetch rejects.
+      insecureHTTPParser: true,
+    }, (response) => {
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > 5 * 1024 * 1024) {
+          request.destroy(new Error("Legacy JSON response exceeded 5 MB"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      response.on("end", () => {
+        const status = Number(response.statusCode || 0);
+        if (status < 200 || status >= 300) {
+          reject(new Error(`${new URL(url).hostname} returned ${status}`));
+          return;
+        }
+        resolve({ buffer: Buffer.concat(chunks), contentType: response.headers["content-type"] || "" });
+      });
+    });
+    request.setTimeout(options.timeoutMs || 9000, () => request.destroy(new Error("Legacy JSON request timed out")));
+    request.on("error", reject);
+    if (body) request.write(body);
+    request.end();
+  });
 }
 
 async function proxyGibsTexture(requestUrl, response) {
@@ -3975,7 +4254,7 @@ async function proxyGibsTexture(requestUrl, response) {
   const result = await getCached(cacheKey, 6 * 60 * 60 * 1000, async () => {
     const upstream = await fetch(gibsUrl, {
       headers: {
-        "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.0 (+local public intelligence dashboard)",
         Accept: `${view.format}, image/*;q=0.9, */*;q=0.5`,
       },
       signal: AbortSignal.timeout(14000),
@@ -4029,14 +4308,29 @@ function clamp(value, min, max) {
 }
 
 async function proxyImage(imageUrl, response) {
-  if (!imageUrl || !/^https?:\/\//i.test(imageUrl)) {
-    return sendJson(response, 400, { error: "Missing or unsupported image URL" });
-  }
-
   try {
+    const target = await remoteMediaPolicy.authorize(imageUrl);
+    if (target.hostname.toLowerCase() === "its.act.pr.gov") {
+      const legacy = await fetchLegacyResource(target.href, {
+        timeoutMs: 8000,
+        headers: {
+          "User-Agent": MEDIA_USER_AGENT,
+          Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        },
+      });
+      const contentType = legacy.contentType || "image/jpeg";
+      if (!/^image\//i.test(contentType)) throw new Error(`Image upstream returned ${contentType}`);
+      response.writeHead(200, {
+        "Content-Type": contentType,
+        "Cache-Control": "no-cache",
+        "Access-Control-Allow-Origin": "*",
+      });
+      response.end(legacy.buffer);
+      return;
+    }
     const upstream = await fetch(imageUrl, {
       headers: {
-        "User-Agent": "Oversee/0.3 (+local public intelligence dashboard)",
+        "User-Agent": MEDIA_USER_AGENT,
         Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
       },
       signal: AbortSignal.timeout(8000),
@@ -4052,14 +4346,15 @@ async function proxyImage(imageUrl, response) {
     });
     response.end(buffer);
   } catch (error) {
-    sendText(response, 502, `Image proxy failed: ${error.message}`);
+    const status = /Missing|unsupported|not part|Private|reserved/.test(error.message) ? 403 : 502;
+    sendText(response, status, `Image proxy failed: ${error.message}`);
   }
 }
 
 function serveStatic(requestPath, response) {
   const safePath = requestPath === "/" ? "/index.html" : decodeURIComponent(requestPath);
-  const filePath = path.resolve(ROOT, `.${safePath}`);
-  const relativePath = path.relative(ROOT, filePath);
+  const filePath = path.resolve(STATIC_ROOT, `.${safePath}`);
+  const relativePath = path.relative(STATIC_ROOT, filePath);
   const pathParts = relativePath.split(path.sep);
   const isContained = relativePath && !relativePath.startsWith(`..${path.sep}`) && relativePath !== ".." && !path.isAbsolute(relativePath);
   const isPublicFile = relativePath === "index.html" || relativePath.startsWith(`assets${path.sep}`);
@@ -4139,7 +4434,10 @@ const USER_SETTING_FIELDS = [
   { key: "wisconsin511ApiKey", label: "Wisconsin 511 API key", env: ["WISCONSIN_511_API_KEY", "WI511_API_KEY"] },
   { key: "louisiana511ApiKey", label: "Louisiana 511 API key", env: ["LOUISIANA_511_API_KEY", "LA511_API_KEY"] },
   { key: "driveNcApiKey", label: "DriveNC API key", env: ["DRIVENC_API_KEY", "NC511_API_KEY"] },
+  { key: "alberta511ApiKey", label: "Alberta 511 API key", env: ["ALBERTA_511_API_KEY", "AB511_API_KEY"] },
   { key: "nswTransportApiKey", label: "Transport for NSW API key", env: ["NSW_TRANSPORT_API_KEY", "TRANSPORT_NSW_API_KEY"] },
+  { key: "aisStreamApiKey", label: "AISStream API key", env: ["AISSTREAM_API_KEY"] },
+  { key: "launchLibraryToken", label: "Launch Library 2 token", env: ["LL2_API_TOKEN"] },
 ];
 
 function publicSettings() {
@@ -4171,7 +4469,12 @@ function updateLocalSettings(payload = {}) {
   USER_CONFIG.updatedAt = new Date().toISOString();
   saveLocalConfig();
   cache.clear();
+  configureAisCollector();
   return publicSettings();
+}
+
+function configureAisCollector() {
+  aisCollector.configure(getConfiguredSecret("aisStreamApiKey", ["AISSTREAM_API_KEY"]));
 }
 
 function getConfiguredSecret(key, envNames = []) {

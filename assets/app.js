@@ -1,3 +1,12 @@
+import "./data.js";
+import "./feed-meta.js";
+import earthTextureUrl from "./earth_atmos_2048.jpg?url";
+import { altitudeBudget, inGeoBounds, spatiallyBalancedSample } from "../src/core/lod.js";
+import { MotionStore } from "../src/core/motion.js";
+import { SatellitePropagator } from "../src/core/satellite-motion.js";
+import { summarizeSourceHealth } from "../src/core/source-health.js";
+import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
+
 (function () {
   const DATA = globalThis.OVERSEE_DATA || { feeds: [], sources: [], layers: [] };
   const META = globalThis.OVERSEE_FEED_META || {};
@@ -40,6 +49,9 @@
     { id: "fires", label: "Fires", color: "#ff7a1a", icon: "flame" },
     { id: "alerts", label: "Alerts", color: "#18f0a0", icon: "bell-ring" },
     { id: "demographics", label: "Population", color: "#39d98a", icon: "users" },
+    { id: "vessels", label: "Vessels", color: "#28d7c0", icon: "ship", advanced: true, defaultOn: false },
+    { id: "launches", label: "Missions", color: "#ffdb66", icon: "rocket", advanced: true, defaultOn: false },
+    { id: "radio", label: "Radio", color: "#ff78c8", icon: "radio", advanced: true, defaultOn: false },
   ];
 
   const CAMERA_FILTERS = [
@@ -59,17 +71,17 @@
     {
       name: "International Camera Catalogs",
       status: "Free public feeds",
-      detail: "Adds no-key camera catalogs from Spain DGT, Madrid open data, Hong Kong Transport Department, Singapore traffic images, NZTA New Zealand, Panama Canal pages, and other official public portals where direct media is available.",
+      detail: "Adds no-key camera catalogs from Spain DGT, Madrid, Hong Kong, Singapore, New Zealand, New South Wales, Puerto Rico, Panama Canal pages, and other official public portals where direct media is available.",
     },
     {
       name: "Bring-Your-Own-Key Camera APIs",
       status: "Optional official feeds",
-      detail: "Wisconsin 511, Louisiana 511, DriveNC, and Transport for NSW adapters stay inactive until the user enters their own developer key in Settings.",
+      detail: "Wisconsin 511, Louisiana 511, DriveNC, and Alberta 511 adapters stay inactive until the user enters their own developer key in Settings.",
     },
     {
-      name: "CelesTrak GP Data",
-      status: "Free public feed",
-      detail: "Active satellite element sets are sampled and rendered as approximate orbital positions with path arcs, altitude classes, and colored orbital regimes.",
+      name: "CelesTrak / SatNOGS Orbital Data",
+      status: "Free public feeds",
+      detail: "Current public element sets are propagated with SGP4 into live approximate positions and ground tracks. SatNOGS provides an automatic fallback when CelesTrak is unavailable.",
     },
     {
       name: "NASA GIBS Imagery",
@@ -92,6 +104,16 @@
       detail: "Public aircraft states are cached for 10 minutes to respect anonymous rate limits; trails show recent heading and observed movement.",
     },
     {
+      name: "Launch Library 2 / Radio Browser",
+      status: "Free optional layers",
+      detail: "Upcoming launch missions and geolocated public radio stations are available from the More layer palette without crowding the default globe.",
+    },
+    {
+      name: "AISStream",
+      status: "Optional user key",
+      detail: "Users can add their own AISStream key in Settings to display live vessel positions. The layer stays disabled when no key is configured.",
+    },
+    {
       name: "USGS Earthquakes",
       status: "Free public feed",
       detail: "All-day GeoJSON feed powers seismic events; significant quakes are enriched with ShakeMap impact metadata when available.",
@@ -107,9 +129,9 @@
       detail: "USGS Topo can be selected as the Cesium globe basemap for a more map-like planning view without an API key.",
     },
     {
-      name: "U.S. Census ACS",
+      name: "U.S. Census Population Estimates",
       status: "Free public demographics",
-      detail: "State-level ACS population points add people/context signals near alerts, fires, cameras, and quake activity without needing an API key.",
+      detail: "Current state-level population estimates add people/context signals near alerts, fires, cameras, and quake activity without needing an API key.",
     },
     {
       name: "National Weather Service",
@@ -146,6 +168,9 @@
     fires: "#ff7a1a",
     alerts: "#18f0a0",
     demographics: "#39d98a",
+    vessels: "#28d7c0",
+    launches: "#ffdb66",
+    radio: "#ff78c8",
     traffic: "#1aa7ff",
     city: "#19e2ff",
     wildfire: "#ff7a1a",
@@ -159,7 +184,8 @@
     sensorMode: "crt",
     earthView: "ops",
     globeRenderer: loadGlobeRendererPreference(),
-    layers: Object.fromEntries(LAYERS.map((layer) => [layer.id, true])),
+    layers: Object.fromEntries(LAYERS.map((layer) => [layer.id, layer.defaultOn !== false])),
+    layerMenuOpen: false,
     snapshot: null,
     query: "",
     searchPanelOpen: false,
@@ -222,6 +248,7 @@
     textures: new Map(),
     earthViewToken: 0,
     animationId: 0,
+    lastMotionUpdate: 0,
     dragging: false,
     dragStartedAt: [0, 0],
   };
@@ -233,9 +260,15 @@
     failed: false,
     baseLayer: null,
     sources: {},
+    pointLayers: {},
     selectionSource: null,
     renderRetry: null,
+    motionTimer: null,
+    lastSelectionUpdate: 0,
   };
+
+  const motionStore = new MotionStore({ renderDelayMs: 15_000, maxCoastMs: 120_000 });
+  const satellitePropagator = new SatellitePropagator();
 
   const els = {
     body: document.body,
@@ -465,6 +498,12 @@
         removePinnedAsset(unpinAction.dataset.unpinKey);
       }
 
+      const nearestCameraAction = event.target.closest("[data-nearest-camera]");
+      if (nearestCameraAction) {
+        const item = findItem(nearestCameraAction.dataset.nearestType, nearestCameraAction.dataset.nearestId);
+        if (item) selectNearestCamera(item);
+      }
+
       const openUrl = event.target.closest("[data-open-url]");
       if (openUrl) {
         window.open(openUrl.dataset.openUrl, "_blank", "noopener,noreferrer");
@@ -483,6 +522,11 @@
 
       const collapseButton = event.target.closest("[data-collapse-panel]");
       if (collapseButton) togglePanelCollapse(collapseButton.dataset.collapsePanel);
+
+      if (state.layerMenuOpen && !event.target.closest("#layerControls")) {
+        state.layerMenuOpen = false;
+        renderLayerControls();
+      }
     });
 
     document.addEventListener("pointerdown", primeAlertAudio, { once: true, passive: true });
@@ -556,14 +600,32 @@
   }
 
   function renderLayerControls() {
-    els.layerControls.innerHTML = LAYERS.map((layer) => {
+    const renderButton = (layer) => {
       const active = state.layers[layer.id] ? "active" : "";
       return `<button class="layer-button ${active}" style="color:${layer.color}" type="button" data-layer="${layer.id}">
         <span class="layer-dot"></span><span>${layer.label}</span>
       </button>`;
-    }).join("");
+    };
+    const primary = LAYERS.filter((layer) => !layer.advanced);
+    const advanced = LAYERS.filter((layer) => layer.advanced);
+    const enabledAdvanced = advanced.filter((layer) => state.layers[layer.id]).length;
+    els.layerControls.innerHTML = `${primary.map(renderButton).join("")}
+      <button class="layer-button layer-more-button ${enabledAdvanced ? "active" : ""}" type="button" data-layer-menu aria-expanded="${state.layerMenuOpen}">
+        <i data-lucide="layers-3"></i><span>More${enabledAdvanced ? ` ${enabledAdvanced}` : ""}</span>
+      </button>
+      <div class="layer-menu ${state.layerMenuOpen ? "open" : ""}" role="group" aria-label="Additional data layers">
+        <div class="layer-menu-head"><span>Additional layers</span><small>Off by default</small></div>
+        ${advanced.map(renderButton).join("")}
+      </div>`;
 
     els.layerControls.onclick = (event) => {
+      const menuButton = event.target.closest("[data-layer-menu]");
+      if (menuButton) {
+        event.stopPropagation();
+        state.layerMenuOpen = !state.layerMenuOpen;
+        renderLayerControls();
+        return;
+      }
       const button = event.target.closest("[data-layer]");
       if (!button) return;
       const layerId = button.dataset.layer;
@@ -572,6 +634,7 @@
       renderGlobeLayers();
       renderMetrics();
     };
+    if (globalThis.lucide) globalThis.lucide.createIcons();
   }
 
   function renderCameraFilters() {
@@ -1169,12 +1232,9 @@
     if (!state.snapshot?.generatedAt || (!options.force && els.systemStatusLabel.textContent === "Syncing")) return;
     const health = sourceHealthCounts(state.snapshot.sourceHealth || []);
     const staleText = health.stale ? ` | ${health.stale} stale cache${health.stale === 1 ? "" : "s"}` : "";
-    els.systemStatusLabel.textContent = health.total && health.responding < health.total
-      ? "Partial Data"
-      : health.stale
-        ? "Cached Data"
-        : "Core Data Online";
-    els.systemStatusSub.textContent = `${health.responding}/${health.total || 0} core sources${staleText} | updated ${formatTimeAgo(state.snapshot.generatedAt)}`;
+    const disabledText = health.disabled ? ` | ${health.disabled} optional off` : "";
+    els.systemStatusLabel.textContent = health.label;
+    els.systemStatusSub.textContent = `${health.responding}/${health.total || 0} core sources${staleText}${disabledText} | updated ${formatTimeAgo(state.snapshot.generatedAt)}`;
   }
 
   function updateSnapshotAgeLabels() {
@@ -1194,6 +1254,9 @@
       const nextSnapshot = await response.json();
       const previousAlertIds = state.seenAlertIds;
       state.snapshot = nextSnapshot;
+      motionStore.ingest("flight", state.snapshot.flights, Date.now());
+      motionStore.ingest("vessel", state.snapshot.vessels || [], Date.now());
+      satellitePropagator.ingest(state.snapshot.satellites);
       const currentAlertIds = new Set((state.snapshot.alerts || []).map((alert) => alert.id));
       if (previousAlertIds) {
         const newCount = [...currentAlertIds].filter((id) => !previousAlertIds.has(id)).length;
@@ -1237,6 +1300,7 @@
     const now = Date.now();
     for (const flight of snapshot?.flights || []) appendTrackPoint("flight", flight, now, 8);
     for (const satellite of snapshot?.satellites || []) appendTrackPoint("satellite", satellite, now, 10);
+    for (const vessel of snapshot?.vessels || []) appendTrackPoint("vessel", vessel, now, 12);
     for (const [key, points] of state.trackHistory) {
       const newest = points.at(-1)?.seenAt || 0;
       if (now - newest > 30 * 60 * 1000) state.trackHistory.delete(key);
@@ -1259,6 +1323,7 @@
   }
 
   function getTrackPoints(type, item) {
+    if (type === "vessel" && Array.isArray(item?.trail) && item.trail.length) return item.trail;
     return state.trackHistory.get(pinKey(type, item.id)) || [];
   }
 
@@ -1267,21 +1332,13 @@
     if (!snapshot) return "Free public intelligence layers fused into one global operating picture.";
     const health = sourceHealthCounts(snapshot.sourceHealth || []);
     const optionalDown = health.optionalTotal - health.optionalResponding;
-    const optionalText = optionalDown > 0 ? ` | ${optionalDown} optional delayed` : "";
+    const optionalText = optionalDown > 0 ? ` | ${optionalDown} optional unavailable or off` : "";
     const staleText = health.stale ? ` | ${health.stale} stale cache${health.stale === 1 ? "" : "s"}` : "";
     return `${labelForScope(state.scope)} scope | auto-refresh 60s | ${health.responding}/${health.total} core adapters responding${optionalText}${staleText} | ${formatTimeAgo(snapshot.generatedAt)}`;
   }
 
   function sourceHealthCounts(sources) {
-    const core = sources.filter((source) => !source.optional);
-    const optional = sources.filter((source) => source.optional);
-    return {
-      responding: core.filter((source) => source.ok).length,
-      total: core.length || sources.length,
-      optionalResponding: optional.filter((source) => source.ok).length,
-      optionalTotal: optional.length,
-      stale: sources.filter((source) => source.stale).length,
-    };
+    return summarizeSourceHealth(sources);
   }
 
   function renderMetrics() {
@@ -1370,19 +1427,12 @@
 
   function renderCharts() {
     const snapshot = state.snapshot || buildFallbackSnapshot();
-    const values = [
-      snapshot.cameras.length,
-      snapshot.satellites.length,
-      snapshot.flights.length,
-      snapshot.quakes.length,
-      snapshot.fires?.length || 0,
-      snapshot.demographics?.length || 0,
-      snapshot.alerts.length,
-    ];
+    const values = LAYERS.map((layer) => Array.isArray(snapshot[layer.id]) ? snapshot[layer.id].length : 0);
     const total = values.reduce((sum, value) => sum + value, 0);
+    const severityTotal = Object.values(snapshot.severity || {}).reduce((sum, value) => sum + Number(value || 0), 0);
     els.signalTotal.textContent = formatNumber(total);
     els.layerTotal.textContent = formatNumber(total);
-    els.alertTotal.textContent = formatNumber(snapshot.alerts.length);
+    els.alertTotal.textContent = formatNumber(severityTotal);
     drawSparkline(els.signalChart, buildSignalSeries(values));
     drawDonut(els.layerDonut, values, LAYERS.map((layer) => layer.color));
     renderLayerLegend(values);
@@ -1775,7 +1825,9 @@
         fullscreenButton: false,
         infoBox: false,
         selectionIndicator: false,
-        shouldAnimate: true,
+        shouldAnimate: false,
+        requestRenderMode: true,
+        maximumRenderTimeChange: Infinity,
         imageryProvider: false,
         terrainProvider: new Cesium.EllipsoidTerrainProvider(),
       });
@@ -1794,6 +1846,7 @@
         const source = new Cesium.CustomDataSource(`oversee-${layer.id}`);
         cesiumGlobe.sources[layer.id] = source;
         await viewer.dataSources.add(source);
+        cesiumGlobe.pointLayers[layer.id] = new CesiumPointLayer({ viewer, Cesium, id: layer.id });
       }
       cesiumGlobe.selectionSource = new Cesium.CustomDataSource("oversee-selection");
       await viewer.dataSources.add(cesiumGlobe.selectionSource);
@@ -1805,11 +1858,13 @@
       viewer.screenSpaceEventHandler.setInputAction((movement) => {
         const picked = viewer.scene.pick(movement.position);
         const data = picked?.id?.oversee;
-        if (data?.item) selectObject(data.type, data.item, { focus: false });
+        if (data?.item) selectObject(data.type, displayItemForGlobe(data.type, data.item), { focus: false });
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+      viewer.camera.moveEnd.addEventListener(() => renderCesiumLayers());
 
       cesiumGlobe.ready = true;
       cesiumGlobe.failed = false;
+      startCesiumMotionUpdates();
       renderCesiumLayers();
       updateRendererVisibility();
     } catch (error) {
@@ -2015,11 +2070,31 @@
   function animateGlobe() {
     if (!globe.renderer) return;
     globe.animationId = requestAnimationFrame(animateGlobe);
-    const t = performance.now() / 1000;
-    if (state.idleSpin) {
-      if (state.globeRenderer === "cesium" && cesiumGlobe.ready && cesiumGlobe.viewer) {
+    if (state.globeRenderer === "cesium") {
+      if (state.idleSpin && cesiumGlobe.ready && cesiumGlobe.viewer) {
         cesiumGlobe.viewer.camera.rotate(globalThis.Cesium.Cartesian3.UNIT_Z, -0.00018);
-      } else if (globe.worldGroup && !globe.dragging) {
+        cesiumGlobe.viewer.scene.requestRender();
+      }
+      return;
+    }
+    const t = performance.now() / 1000;
+    if (performance.now() - globe.lastMotionUpdate >= 100) {
+      globe.lastMotionUpdate = performance.now();
+      for (const sprite of globe.pickables) {
+        const { type, item } = sprite.userData || {};
+        if (type !== "flight" && type !== "satellite" && type !== "vessel") continue;
+        const current = displayItemForGlobe(type, item);
+        const altitude = type === "satellite"
+          ? clamp(Number(current.altitudeKm || 550) / 18000, 0.035, 0.62)
+          : type === "vessel" ? 0.006 : 0.045;
+        sprite.position.copy(latLngToVector3(Number(current.lat), Number(current.lng), 2.02 + altitude));
+      }
+      if (state.selection?.item && (state.selection.type === "flight" || state.selection.type === "satellite" || state.selection.type === "vessel")) {
+        renderSelectedGlobeFocus();
+      }
+    }
+    if (state.idleSpin) {
+      if (globe.worldGroup && !globe.dragging) {
         globe.worldGroup.rotation.y += 0.0012;
       }
     }
@@ -2057,6 +2132,9 @@
     if (state.layers.fires) addMarkers("fires", filterByQuery(snapshot.fires || []), "fire");
     if (state.layers.alerts) addMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
     if (state.layers.demographics) addMarkers("demographics", filterByQuery(snapshot.demographics || []), "demographic");
+    if (state.layers.vessels) addMarkers("vessels", filterByQuery(snapshot.vessels || []), "vessel");
+    if (state.layers.launches) addMarkers("launches", filterByQuery(snapshot.launches || []), "launch");
+    if (state.layers.radio) addMarkers("radio", filterByQuery(snapshot.radio || []), "radio");
     renderSelectedGlobeFocus();
   }
 
@@ -2067,6 +2145,9 @@
       cesiumGlobe.renderRetry = null;
     }
     Object.values(cesiumGlobe.sources).forEach((source) => source.entities.removeAll());
+    for (const layer of LAYERS) {
+      if (cesiumGlobe.pointLayers[layer.id]) cesiumGlobe.pointLayers[layer.id].show = state.layers[layer.id];
+    }
     const snapshot = state.snapshot;
     if (state.layers.cameras) addCesiumMarkers("cameras", getMapCameras(), "camera");
     if (state.layers.satellites) addCesiumMarkers("satellites", filterByQuery(snapshot.satellites), "satellite");
@@ -2075,42 +2156,53 @@
     if (state.layers.fires) addCesiumMarkers("fires", filterByQuery(snapshot.fires || []), "fire");
     if (state.layers.alerts) addCesiumMarkers("alerts", filterByQuery(snapshot.alerts), "alert");
     if (state.layers.demographics) addCesiumMarkers("demographics", filterByQuery(snapshot.demographics || []), "demographic");
+    if (state.layers.vessels) addCesiumMarkers("vessels", filterByQuery(snapshot.vessels || []), "vessel");
+    if (state.layers.launches) addCesiumMarkers("launches", filterByQuery(snapshot.launches || []), "launch");
+    if (state.layers.radio) addCesiumMarkers("radio", filterByQuery(snapshot.radio || []), "radio");
     renderCesiumSelection();
     cesiumGlobe.viewer?.scene?.requestRender?.();
-    const cameraSource = cesiumGlobe.sources.cameras;
-    if (state.layers.cameras && getMapCameras().length && cameraSource && !cameraSource.entities.values.length && !options.retry) {
+    const cameraPoints = cesiumGlobe.pointLayers.cameras;
+    if (state.layers.cameras && getMapCameras().length && cameraPoints && !cameraPoints.size && !options.retry) {
       cesiumGlobe.renderRetry = window.setTimeout(() => renderCesiumLayers({ retry: true }), 350);
     }
   }
 
   function addCesiumMarkers(layerId, items, type) {
     const source = cesiumGlobe.sources[layerId];
-    if (!source || !globalThis.Cesium) return;
+    const pointLayer = cesiumGlobe.pointLayers[layerId];
+    if (!source || !pointLayer || !globalThis.Cesium) return;
     const Cesium = globalThis.Cesium;
-    const max = type === "camera" ? 2800 : type === "satellite" ? 900 : type === "flight" ? 1200 : type === "quake" ? 700 : type === "fire" ? 1200 : type === "demographic" ? 80 : 260;
-    const visible = sampleItems(items, max);
+    const visible = getCesiumVisibleItems(items, type);
+    pointLayer.sync(visible, {
+      type,
+      resolvePosition: (item, now) => {
+        const displayed = displayItemForGlobe(type, item, now);
+        return {
+          lat: Number(displayed.lat),
+          lng: Number(displayed.lng),
+          height: cesiumHeightForType(type, displayed),
+        };
+      },
+      describe: (item) => ({
+        pixelSize: cesiumPointSize(type, item),
+        color: cesiumColor(item.displayColor || COLORS[layerId] || colorForType(type), type === "camera" ? 0.78 : 0.92),
+        outlineColor: Cesium.Color.WHITE.withAlpha(0.78),
+        outlineWidth: type === "alert" ? 2 : 1,
+        scaleByDistance: new Cesium.NearFarScalar(900000, 1.08, 18000000, 0.54),
+        translucencyByDistance: new Cesium.NearFarScalar(900000, 0.96, 21000000, 0.42),
+      }),
+    });
+
+    let orbitCount = 0;
+    let trailCount = 0;
     for (const item of visible) {
-      const lat = Number(item.lat);
-      const lng = Number(item.lng);
+      const displayed = displayItemForGlobe(type, item);
+      const lat = Number(displayed.lat);
+      const lng = Number(displayed.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
       const color = cesiumColor(item.displayColor || COLORS[layerId] || colorForType(type), type === "camera" ? 0.78 : 0.92);
-      const height = cesiumHeightForType(type, item);
-      const entity = source.entities.add({
-        name: item.name || item.callsign || item.title || item.id,
-        position: Cesium.Cartesian3.fromDegrees(lng, lat, height),
-        point: {
-          pixelSize: cesiumPointSize(type, item),
-          color,
-          outlineColor: Cesium.Color.WHITE.withAlpha(0.78),
-          outlineWidth: type === "alert" ? 2 : 1,
-          heightReference: Cesium.HeightReference.NONE,
-          scaleByDistance: new Cesium.NearFarScalar(900000, 1.08, 18000000, 0.54),
-          translucencyByDistance: new Cesium.NearFarScalar(900000, 0.96, 21000000, 0.42),
-        },
-      });
-      entity.oversee = { type, item };
-
-      if (type === "satellite" && Array.isArray(item.orbit) && item.orbit.length && source.entities.values.length < 240) {
+      const height = cesiumHeightForType(type, displayed);
+      if (type === "satellite" && Array.isArray(item.orbit) && item.orbit.length && orbitCount < 120) {
         source.entities.add({
           polyline: {
             positions: cesiumPositions(item.orbit, Math.max(height, 600000)),
@@ -2119,11 +2211,96 @@
             arcType: Cesium.ArcType.GEODESIC,
           },
         });
+        orbitCount += 1;
       }
-      if (type === "flight" && source.entities.values.length < 700) {
+      if (type === "flight" && trailCount < 500) {
         addCesiumTrackLine(source, "flight", item, color.withAlpha(0.56), 2);
+        trailCount += 1;
+      }
+      if (type === "vessel" && trailCount < 500) {
+        addCesiumTrackLine(source, "vessel", item, color.withAlpha(0.5), 2);
+        trailCount += 1;
       }
     }
+  }
+
+  function startCesiumMotionUpdates() {
+    if (cesiumGlobe.motionTimer) return;
+    cesiumGlobe.motionTimer = window.setInterval(() => {
+      if (state.globeRenderer !== "cesium" || !cesiumGlobe.ready) return;
+      if (state.layers.flights) cesiumGlobe.pointLayers.flights?.updateDynamic();
+      if (state.layers.satellites) cesiumGlobe.pointLayers.satellites?.updateDynamic();
+      if (state.layers.vessels) cesiumGlobe.pointLayers.vessels?.updateDynamic();
+      const now = Date.now();
+      if (
+        state.selection?.item
+        && (state.selection.type === "flight" || state.selection.type === "satellite" || state.selection.type === "vessel")
+        && now - cesiumGlobe.lastSelectionUpdate >= 1000
+      ) {
+        cesiumGlobe.lastSelectionUpdate = now;
+        renderCesiumSelection();
+      }
+      cesiumGlobe.viewer?.scene?.requestRender?.();
+    }, 250);
+  }
+
+  function getCesiumVisibleItems(items, type) {
+    const values = Array.isArray(items) ? items : [];
+    const viewer = cesiumGlobe.viewer;
+    const cameraHeight = Number(viewer?.camera?.positionCartographic?.height || 22000000);
+    const hardLimit = type === "camera"
+      ? 4500
+      : type === "satellite"
+        ? 1200
+        : type === "flight"
+          ? 1800
+          : type === "vessel"
+            ? 2200
+            : type === "radio"
+              ? 750
+              : type === "launch"
+                ? 100
+                : type === "quake"
+            ? 900
+            : type === "fire"
+              ? 1800
+              : type === "demographic"
+                ? 100
+                : 360;
+    const budget = Math.min(hardLimit, altitudeBudget(cameraHeight, {
+      local: type === "camera" ? 1800 : 1100,
+      regional: type === "camera" ? 3200 : 1500,
+      global: hardLimit,
+    }));
+    const bounds = cesiumViewBounds();
+    const inView = bounds ? values.filter((item) => inGeoBounds(item, bounds)) : values;
+    const candidates = inView.length ? inView : values;
+    return spatiallyBalancedSample(candidates, budget, {
+      score: (item) => type === "camera"
+        ? Number(item.capability === "stream" || item.capability === "player") * 10
+        : Number(item.magnitude || item.frp || 0),
+    });
+  }
+
+  function cesiumViewBounds() {
+    const Cesium = globalThis.Cesium;
+    const rectangle = cesiumGlobe.viewer?.camera?.computeViewRectangle?.(Cesium?.Ellipsoid?.WGS84);
+    if (!rectangle || !Cesium) return null;
+    return {
+      west: Cesium.Math.toDegrees(rectangle.west),
+      south: Cesium.Math.toDegrees(rectangle.south),
+      east: Cesium.Math.toDegrees(rectangle.east),
+      north: Cesium.Math.toDegrees(rectangle.north),
+    };
+  }
+
+  function displayItemForGlobe(type, item, now = Date.now()) {
+    if (type === "satellite") {
+      const point = satellitePropagator.position(item, new Date(now));
+      return { ...item, ...point, motionState: "propagated", motionAgeMs: 0 };
+    }
+    if (type === "flight" || type === "vessel") return motionStore.display(type, item, now);
+    return item;
   }
 
   function addCesiumTrackLine(source, type, item, color, width = 2) {
@@ -2137,7 +2314,7 @@
     if (trail.length < 2) return;
     source.entities.add({
       polyline: {
-        positions: cesiumPositions(trail, type === "satellite" ? cesiumHeightForType(type, item) : 18000),
+        positions: cesiumPositions(trail, type === "satellite" ? cesiumHeightForType(type, item) : type === "vessel" ? 1400 : 18000),
         width,
         material: color,
         arcType: globalThis.Cesium.ArcType.GEODESIC,
@@ -2150,11 +2327,12 @@
     const Cesium = globalThis.Cesium;
     cesiumGlobe.selectionSource.entities.removeAll();
     if (!item) return;
-    const lat = Number(item.lat);
-    const lng = Number(item.lng);
+    const displayed = displayItemForGlobe(type, item);
+    const lat = Number(displayed.lat);
+    const lng = Number(displayed.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     const color = cesiumColor(type === "alert" ? COLORS.alerts : colorForType(type), 0.94);
-    const height = cesiumHeightForType(type, item);
+    const height = cesiumHeightForType(type, displayed);
     cesiumGlobe.selectionSource.entities.add({
       position: Cesium.Cartesian3.fromDegrees(lng, lat, height),
       point: {
@@ -2173,17 +2351,21 @@
         material: color.withAlpha(0.8),
       },
     });
-    if (type === "satellite" && Array.isArray(item.orbit) && item.orbit.length) {
+    if (type === "satellite") {
+      const orbit = satellitePropagator.groundTrack(item, new Date(), 120);
+      if (orbit.length) {
       cesiumGlobe.selectionSource.entities.add({
         polyline: {
-          positions: cesiumPositions(item.orbit, Math.max(height, 600000)),
+          positions: cesiumPositions(orbit, Math.max(height, 600000)),
           width: 3,
           material: cesiumColor(COLORS.satellites, 0.86),
           arcType: Cesium.ArcType.GEODESIC,
         },
       });
+      }
     }
     if (type === "flight") addCesiumTrackLine(cesiumGlobe.selectionSource, "flight", item, cesiumColor(COLORS.flights, 0.9), 3);
+    if (type === "vessel") addCesiumTrackLine(cesiumGlobe.selectionSource, "vessel", item, cesiumColor(COLORS.vessels, 0.9), 3);
     if (type === "quake" && item.shakeMap?.overlay && item.shakeMap?.bounds) {
       const bounds = item.shakeMap.bounds;
       if ([bounds.west, bounds.south, bounds.east, bounds.north].every((value) => Number.isFinite(Number(value)))) {
@@ -2248,6 +2430,9 @@
     if (type === "fire") return 30000;
     if (type === "alert") return 24000;
     if (type === "demographic") return 22000;
+    if (type === "vessel") return 1200;
+    if (type === "launch") return 18000;
+    if (type === "radio") return 7000;
     return 9000;
   }
 
@@ -2258,19 +2443,27 @@
     if (type === "alert") return 10;
     if (type === "fire") return 8 + clamp(Number(item.frp || 0) / 40, 0, 10);
     if (type === "demographic") return 7 + clamp(Math.sqrt(Number(item.population || 0)) / 1600, 2, 14);
+    if (type === "vessel") return 7;
+    if (type === "launch") return 10;
+    if (type === "radio") return 6;
     return 6;
   }
 
   function addMarkers(layerId, items, type) {
     const group = globe.groups[layerId];
-    const max = type === "satellite" ? 700 : type === "flight" ? 620 : type === "quake" ? 420 : type === "fire" ? 720 : type === "demographic" ? 80 : 260;
-    const visible = sampleItems(items, max);
+    const max = type === "satellite" ? 700 : type === "flight" ? 620 : type === "vessel" ? 700 : type === "radio" ? 420 : type === "launch" ? 100 : type === "quake" ? 420 : type === "fire" ? 720 : type === "demographic" ? 80 : 260;
+    const visible = spatiallyBalancedSample(items, max, {
+      score: (item) => type === "camera"
+        ? Number(item.capability === "stream" || item.capability === "player") * 10
+        : Number(item.magnitude || item.frp || 0),
+    });
     for (const item of visible) {
       const color = item.displayColor || COLORS[layerId] || colorForType(type);
-      const lat = Number(item.lat);
-      const lng = Number(item.lng);
+      const displayed = displayItemForGlobe(type, item);
+      const lat = Number(displayed.lat);
+      const lng = Number(displayed.lng);
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
-      const altitude = type === "satellite" ? clamp((item.altitudeKm || 550) / 18000, 0.035, 0.62) : type === "flight" ? 0.045 : type === "demographic" ? 0.024 : 0.018;
+      const altitude = type === "satellite" ? clamp((item.altitudeKm || 550) / 18000, 0.035, 0.62) : type === "flight" ? 0.045 : type === "vessel" ? 0.006 : type === "demographic" ? 0.024 : 0.018;
       const size = type === "quake"
         ? 0.028 + clamp((item.magnitude || 1) / 80, 0, 0.06)
         : type === "fire"
@@ -2290,6 +2483,10 @@
       if (type === "flight" && group.children.length < 520) {
         const trackTrail = makeTrackTrail("flight", item, color, 2.075, { opacity: 0.34 });
         group.add(trackTrail || makeFlightTrail(item, color, 2.075));
+      }
+      if (type === "vessel" && group.children.length < 520) {
+        const trackTrail = makeTrackTrail("vessel", item, color, 2.035, { opacity: 0.32 });
+        if (trackTrail) group.add(trackTrail);
       }
     }
   }
@@ -2322,6 +2519,7 @@
     if (!globe.selectionGroup) return;
     clearGroup(globe.selectionGroup);
     if (!item) return;
+    item = displayItemForGlobe(type, item);
     const lat = Number(item.lat);
     const lng = Number(item.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
@@ -2367,6 +2565,12 @@
         globe.selectionGroup.add(makePathLine(item.orbit, COLORS.satellites, 2.23, 0.78));
       }
       globe.selectionGroup.add(makeSelectionBeam(lat, lng, COLORS.satellites));
+    }
+
+    if (type === "vessel") {
+      const trail = makeTrackTrail("vessel", item, COLORS.vessels, 2.055, { opacity: 0.94 });
+      if (trail) globe.selectionGroup.add(trail);
+      globe.selectionGroup.add(makeSelectionBeam(lat, lng, COLORS.vessels));
     }
 
     globe.selectionGroup.add(makePathLine(makeGeoCircle(lat, lng, 55), color, 2.075, 0.74));
@@ -2422,13 +2626,13 @@
     const hit = globe.raycaster.intersectObjects(globe.pickables, false)[0];
     if (hit?.object?.userData?.item) {
       const { type, item } = hit.object.userData;
-      selectObject(type, item, { focus: false });
+      selectObject(type, displayItemForGlobe(type, item), { focus: false });
     }
   }
 
   function createEarthTexture() {
     if (globalThis.THREE?.TextureLoader) {
-      const texture = new THREE.TextureLoader().load("./assets/earth_atmos_2048.jpg", () => {
+      const texture = new THREE.TextureLoader().load(earthTextureUrl, () => {
         texture.needsUpdate = true;
       });
       texture.anisotropy = globe.renderer?.capabilities?.getMaxAnisotropy?.() || 1;
@@ -2586,10 +2790,9 @@
     if (!globalThis.L || !els.cameraMap) return;
     state.cameraRenderer = globalThis.L.canvas({ padding: 0.5 });
     state.cameraMap = globalThis.L.map(els.cameraMap, { zoomControl: true, minZoom: 2, renderer: state.cameraRenderer }).setView([20, 0], 2);
-    globalThis.L.tileLayer("https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png", {
+    globalThis.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
-      subdomains: "abcd",
-      attribution: "&copy; OpenStreetMap contributors &copy; CARTO",
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
     }).addTo(state.cameraMap);
     state.cameraLayer = globalThis.L.layerGroup().addTo(state.cameraMap);
     state.cameraMap.on("moveend zoomend", () => {
@@ -2765,6 +2968,9 @@
       ? `<button class="text-button" style="color:${color}" type="button" data-select-type="camera" data-select-id="${escapeHtml(item.id)}" data-scroll-watch="true">Watch Feed</button>`
       : `<button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-scroll-watch="true">View Details</button>`;
     const focusAction = `<button class="text-button" style="color:${color}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true" data-pulse="true">${type === "alert" ? "Pinpoint Alert" : "Pinpoint"}</button>`;
+    const nearestCameraAction = type !== "camera" && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))
+      ? `<button class="text-button" style="color:var(--cyan)" type="button" data-nearest-camera data-nearest-type="${type}" data-nearest-id="${escapeHtml(item.id)}"><i data-lucide="cctv"></i>Nearest Camera</button>`
+      : "";
     els.selectionCard.innerHTML = `<button class="selection-close" type="button" data-close-selection aria-label="Close selection card">
         <i data-lucide="x"></i>
       </button>
@@ -2773,12 +2979,25 @@
       <div class="selection-actions">
         ${primaryAction}
         ${focusAction}
+        ${nearestCameraAction}
         <button class="text-button" style="color:${pinned ? "var(--green)" : color}" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">
           <i data-lucide="${pinned ? "bookmark-check" : "bookmark"}"></i>${pinned ? "Pinned" : "Pin"}
         </button>
       </div>`;
     els.selectionCard.classList.add("visible");
     if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function selectNearestCamera(item) {
+    const cameras = filterUnavailableStreams(state.snapshot?.cameras || [])
+      .filter((camera) => Number.isFinite(Number(camera.lat)) && Number.isFinite(Number(camera.lng)));
+    if (!cameras.length) return;
+    const nearest = cameras.reduce((best, camera) => {
+      const distance = distanceKm(Number(item.lat), Number(item.lng), Number(camera.lat), Number(camera.lng));
+      return !best || distance < best.distance ? { camera, distance } : best;
+    }, null);
+    if (!nearest) return;
+    selectObject("camera", nearest.camera, { scrollToWatch: true });
   }
 
   function clearSelectionCard() {
@@ -2791,6 +3010,7 @@
   }
 
   function renderWatch(type, item, options = {}) {
+    stopActiveMedia();
     els.watchTitle.textContent = item.name || item.callsign || item.title || item.id;
     els.watchMeta.textContent = assetSubtitle(type, item);
     els.watchActions.innerHTML = buildWatchActions(type, item);
@@ -2822,20 +3042,11 @@
   }
 
   function renderFeedView(view) {
-    if (state.hls) {
-      state.hls.destroy();
-      state.hls = null;
-    }
-    if (state.stillRefreshTimer) {
-      clearInterval(state.stillRefreshTimer);
-      state.stillRefreshTimer = null;
-    }
-
+    stopActiveMedia();
     if (!view) {
       els.watchView.innerHTML = `<div class="watch-placeholder"><i data-lucide="cctv"></i><span>No feed selected</span></div>`;
       return;
     }
-
     const note = view.note ? `<p class="media-note">${escapeHtml(view.note)}</p>` : "";
     if (view.type === "image") {
       const src = toProxyImageUrl(view.url, true);
@@ -2876,6 +3087,20 @@
     }
 
     if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function stopActiveMedia() {
+    if (state.hls) {
+      state.hls.destroy();
+      state.hls = null;
+    }
+    if (state.stillRefreshTimer) {
+      clearInterval(state.stillRefreshTimer);
+      state.stillRefreshTimer = null;
+    }
+    const media = els.watchView?.querySelector?.("video, audio");
+    media?.pause?.();
+    if (media) media.removeAttribute("src");
   }
 
   function scheduleStillRefresh(view) {
@@ -2920,6 +3145,25 @@
 
   function renderInfoWatch(type, item) {
     const color = colorForType(type);
+    if (type === "radio") {
+      els.watchView.innerHTML = `<div class="asset-watch radio-watch" style="border-color:${color}">
+        <div class="asset-watch-icon"><i data-lucide="radio"></i></div>
+        <div>
+          <span class="media-badge live">Public radio</span>
+          <h3>${escapeHtml(item.name || "Radio station")}</h3>
+          <p>${escapeHtml(assetSubtitle(type, item))}</p>
+          <audio controls preload="none" src="${escapeHtml(item.streamUrl || "")}"></audio>
+          <small>Playback starts only when you press play.</small>
+        </div>
+      </div>`;
+      const audio = els.watchView.querySelector("audio");
+      audio?.addEventListener("error", () => {
+        const note = els.watchView.querySelector("small");
+        if (note) note.textContent = "This broadcaster is not accepting playback right now. Try its source page.";
+      });
+      if (globalThis.lucide) globalThis.lucide.createIcons();
+      return;
+    }
     if (type === "alert") {
       els.watchView.innerHTML = `<div class="alert-watch" style="border-color:${color}">
         <div>
@@ -2953,6 +3197,10 @@
         ? trackPoints.length > 1
           ? `${trackPoints.length} observed positions plus computed orbital path.`
           : "Computed orbital path is highlighted from public element data."
+        : type === "vessel"
+          ? trackPoints.length > 1
+            ? `${trackPoints.length} recent AIS positions retained for this vessel.`
+            : "Waiting for another AIS position to draw a wake trail."
         : infoSummary(type, item);
     els.watchView.innerHTML = `<div class="asset-watch" style="border-color:${color}">
       <div class="asset-watch-icon"><i data-lucide="${iconForType(type)}"></i></div>
@@ -3054,6 +3302,9 @@
     if (type === "quake") return snapshot.quakes.find((item) => item.id === id);
     if (type === "fire") return (snapshot.fires || []).find((item) => item.id === id);
     if (type === "demographic") return (snapshot.demographics || []).find((item) => item.id === id);
+    if (type === "vessel") return (snapshot.vessels || []).find((item) => item.id === id);
+    if (type === "launch") return (snapshot.launches || []).find((item) => item.id === id);
+    if (type === "radio") return (snapshot.radio || []).find((item) => item.id === id);
     if (type === "alert") return snapshot.alerts.find((item) => item.id === id);
     return null;
   }
@@ -3153,6 +3404,9 @@
     if (state.layers.fires) assets.push(...(snapshot.fires || []).map((item) => ({ type: "fire", item })));
     if (state.layers.alerts) assets.push(...snapshot.alerts.map((item) => ({ type: "alert", item })));
     if (state.layers.demographics) assets.push(...(snapshot.demographics || []).map((item) => ({ type: "demographic", item })));
+    if (state.layers.vessels) assets.push(...(snapshot.vessels || []).map((item) => ({ type: "vessel", item })));
+    if (state.layers.launches) assets.push(...(snapshot.launches || []).map((item) => ({ type: "launch", item })));
+    if (state.layers.radio) assets.push(...(snapshot.radio || []).map((item) => ({ type: "radio", item })));
     if (state.layers.cameras) assets.push(...getFilteredCameras().slice(0, 16).map((item) => ({ type: "camera", item })));
     return filterAssetsByQuery(assets);
   }
@@ -3166,6 +3420,9 @@
       ...snapshot.quakes.map((item) => ({ type: "quake", item })),
       ...(snapshot.fires || []).map((item) => ({ type: "fire", item })),
       ...(snapshot.demographics || []).map((item) => ({ type: "demographic", item })),
+      ...(snapshot.vessels || []).map((item) => ({ type: "vessel", item })),
+      ...(snapshot.launches || []).map((item) => ({ type: "launch", item })),
+      ...(snapshot.radio || []).map((item) => ({ type: "radio", item })),
       ...snapshot.alerts.map((item) => ({ type: "alert", item })),
     ]);
     if (!state.query) return matches;
@@ -3219,6 +3476,16 @@
       item.state,
       item.populationLabel,
       item.dataset,
+      item.mmsi,
+      item.imo,
+      item.destination,
+      item.vesselType,
+      item.agency,
+      item.rocket,
+      item.missionName,
+      item.missionType,
+      item.language,
+      item.codec,
     ]
       .concat(Array.isArray(item.tags) ? item.tags : [])
       .filter(Boolean)
@@ -3237,6 +3504,9 @@
       quakes: [],
       fires: [],
       demographics: [],
+      vessels: [],
+      launches: [],
+      radio: [],
       alerts: [],
       traffic: [],
       events: cameras.slice(0, 6).map((camera) => ({
@@ -3392,7 +3662,7 @@
         ["Period", item.periodMinutes ? `${item.periodMinutes.toFixed(1)} min` : "unknown"],
         ["Position", formatLatLng(item.lat, item.lng)],
         ["Trail", getTrackPoints(type, item).length > 1 ? `${getTrackPoints(type, item).length} points` : "orbit fallback"],
-        ["Source", "CelesTrak GP"],
+        ["Source", item.source || "Public orbital elements"],
       ];
     }
     if (type === "flight") {
@@ -3466,18 +3736,55 @@
         ["Source", item.source || "U.S. Census"],
       ];
     }
+    if (type === "vessel") {
+      return [
+        ["MMSI", item.mmsi || "unknown"],
+        ["IMO", item.imo || "unknown"],
+        ["Vessel", item.vesselType || "unclassified"],
+        ["Destination", item.destination || "not reported"],
+        ["Speed", item.speedKnots != null ? `${Number(item.speedKnots).toFixed(1)} kn` : "unknown"],
+        ["Course", item.course != null ? `${Math.round(item.course)} deg` : "unknown"],
+        ["Observed", formatShortTime(item.observedAt)],
+        ["Source", "AISStream"],
+      ];
+    }
+    if (type === "launch") {
+      return [
+        ["Status", item.status || "unknown"],
+        ["Launch", item.net ? formatShortTime(item.net) : "TBD"],
+        ["Provider", item.agency || "unknown"],
+        ["Vehicle", item.rocket || "unknown"],
+        ["Pad", item.pad || item.area || "unknown"],
+        ["Mission", item.missionName || item.missionType || "not disclosed"],
+        ["Orbit", item.orbit || "not disclosed"],
+        ["Source", "Launch Library 2"],
+      ];
+    }
+    if (type === "radio") {
+      return [
+        ["Country", item.country || "unknown"],
+        ["Region", item.region || "unknown"],
+        ["Language", item.language || "not listed"],
+        ["Codec", item.codec || "unknown"],
+        ["Bitrate", item.bitrate ? `${item.bitrate} kbps` : "unknown"],
+        ["Source", "Radio Browser"],
+      ];
+    }
     return [["Type", type], ["ID", item.id || "unknown"], ["Source", item.source || "public"]];
   }
 
   function assetSubtitle(type, item) {
     if (type === "camera") return `${item.area || "Unknown"} | ${item.region || item.country || "Global"} | ${item.capabilityLabel || item.media || "Camera"}`;
-    if (type === "satellite") return `${item.objectType || "Satellite"} | ${item.altitudeKm ? `${Math.round(item.altitudeKm)} km` : "orbit"} | CelesTrak`;
+    if (type === "satellite") return `${item.objectType || "Satellite"} | ${item.altitudeKm ? `${Math.round(item.altitudeKm)} km` : "orbit"} | ${item.source || "Public orbital data"}`;
     if (type === "flight") return `${item.registration || item.country || "Unknown"} | ${item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "altitude unknown"} | ${item.source || "Aircraft feed"}`;
     if (type === "quake") return `M${item.magnitude?.toFixed?.(1) || "?"} | ${item.location || "USGS event"}`;
     if (type === "fire" && (item.subtype === "incident" || item.subtype === "perimeter")) return `${item.subtype === "perimeter" ? "Perimeter" : "Incident"} | ${item.acres ? `${formatNumber(Math.round(item.acres))} acres` : item.gacc || "WildFireSA"} | ${item.source || "EGP"}`;
     if (type === "fire") return `${item.instrument || "VIIRS"} | FRP ${Math.round(item.frp || 0)} | ${item.confidence || "unknown"} confidence`;
     if (type === "alert") return `${item.event || "Alert"} | ${item.areaSummary || item.region || item.area || "NWS"}`;
-    if (type === "demographic") return `${item.populationLabel || formatNumber(item.population || 0)} people | ${item.source || "U.S. Census ACS"}`;
+    if (type === "demographic") return `${item.populationLabel || formatNumber(item.population || 0)} people | ${item.source || "U.S. Census Population Estimates"}`;
+    if (type === "vessel") return `${item.vesselType || "Vessel"} | ${item.speedKnots != null ? `${Number(item.speedKnots).toFixed(1)} kn` : "speed unknown"} | AISStream`;
+    if (type === "launch") return `${item.status || "Mission"} | ${item.rocket || item.agency || "Launch Library 2"} | ${item.net ? formatShortTime(item.net) : "time TBD"}`;
+    if (type === "radio") return `${item.region || item.country || "Global"} | ${item.language || item.codec || "Public radio"}`;
     return item.source || "Public signal";
   }
 
@@ -3491,7 +3798,10 @@
     if (type === "alert") return item.source === "NWS" || !item.source
       ? "Official public weather alert from the National Weather Service."
       : `${item.source} public monitoring signal. Treat reference/media items as context, not official confirmation.`;
-    if (type === "demographic") return `State-level population context from ${item.source || "U.S. Census ACS"}. Useful for reading hazards near people, not as an incident feed.`;
+    if (type === "demographic") return `State-level population context from ${item.source || "U.S. Census Population Estimates"}. Useful for reading hazards near people, not as an incident feed.`;
+    if (type === "vessel") return `Public AIS position for ${item.name || item.mmsi || "this vessel"}, observed ${formatTimeAgo(item.observedAt)}.`;
+    if (type === "launch") return `${item.status || "Scheduled"} space mission from Launch Library 2. ${item.description || "Mission details are shown only when published by the source."}`;
+    if (type === "radio") return "Public internet radio station from the community Radio Browser directory.";
     return assetSubtitle(type, item);
   }
 
@@ -3504,6 +3814,9 @@
       fire: "flame",
       alert: "bell-ring",
       demographic: "users",
+      vessel: "ship",
+      launch: "rocket",
+      radio: "radio",
       traffic: "route",
     }[type] || "circle";
   }
@@ -3517,6 +3830,9 @@
       fire: COLORS.fires,
       alert: COLORS.alerts,
       demographic: COLORS.demographics,
+      vessel: COLORS.vessels,
+      launch: COLORS.launches,
+      radio: COLORS.radio,
       traffic: COLORS.traffic,
     }[type] || COLORS.cameras;
   }

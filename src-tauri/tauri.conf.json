@@ -1,10 +1,10 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Oversee",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "identifier": "com.karitcoffee.oversee",
   "build": {
-    "beforeDevCommand": "node server.js",
+    "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:4173",
     "frontendDist": "placeholder-dist"
   },
@@ -27,6 +27,8 @@
     },
     "resources": [
       "../server.js",
+      "../server-src",
+      "../dist",
       "../index.html",
       "../assets",
       "../docs",
