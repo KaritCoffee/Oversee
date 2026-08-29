@@ -3496,7 +3496,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const candidates = inView.length ? inView : values;
     return spatiallyBalancedSample(candidates, budget, {
       score: (item) => type === "camera"
-        ? Number(item.capability === "stream" || item.capability === "player") * 10
+        ? cameraDisplayScore(item)
         : Number(item.magnitude || item.frp || 0),
     });
   }
@@ -3673,7 +3673,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const max = type === "satellite" ? 700 : type === "flight" ? 620 : type === "vessel" ? 700 : type === "radio" ? 420 : type === "launch" ? 100 : type === "quake" ? 420 : type === "fire" ? 720 : type === "demographic" ? 80 : 260;
     const visible = spatiallyBalancedSample(items, max, {
       score: (item) => type === "camera"
-        ? Number(item.capability === "stream" || item.capability === "player") * 10
+        ? cameraDisplayScore(item)
         : Number(item.magnitude || item.frp || 0),
     });
     for (const item of visible) {
@@ -4420,18 +4420,14 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const maxMarkers = zoom <= 3 ? 4200 : zoom <= 5 ? 7000 : 10000;
     if (!cameras || cameras.length <= maxMarkers) return cameras || [];
     const selectedId = state.selection?.type === "camera" ? state.selection.id : "";
-    const priority = [];
-    const priorityIds = new Set();
-    const priorityLimit = Math.floor(maxMarkers * 0.45);
-    for (const camera of cameras) {
-      if (camera.id === selectedId || highlighted.has(camera.id) || camera.capability === "player" || camera.capability === "stream") {
-        priority.push(camera);
-        priorityIds.add(camera.id);
-      }
-      if (priority.length >= priorityLimit) break;
+    const sampled = spatiallyBalancedSample(cameras, maxMarkers, {
+      score: (camera) => cameraDisplayScore(camera) + (highlighted.has(camera.id) ? 8 : 0),
+    });
+    const selected = selectedId ? cameras.find((camera) => camera.id === selectedId) : null;
+    if (selected && !sampled.some((camera) => camera.id === selectedId)) {
+      sampled[sampled.length - 1] = selected;
     }
-    const remaining = cameras.filter((camera) => !priorityIds.has(camera.id));
-    return [...priority, ...sampleItems(remaining, Math.max(0, maxMarkers - priority.length))];
+    return sampled;
   }
 
   async function selectObject(type, item, options = {}) {
@@ -4564,7 +4560,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         ${note}
       </div>`;
       const image = els.watchView.querySelector("img[data-direct-src]");
-      image?.addEventListener("load", () => reportSelectedCameraHealth(true, "image"), { once: true });
+      image?.addEventListener("load", () => reportSelectedCameraHealth(true, "image", "", view.healthObservation || { fallbackUsed: view.fallbackUsed, degraded: view.fallbackUsed }), { once: true });
       image?.addEventListener("error", () => {
         reportSelectedCameraHealth(false, "image", "Public still image did not load");
         showImageError(view);
@@ -4587,7 +4583,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         state.hls = new globalThis.Hls({ lowLatencyMode: true });
         state.hls.loadSource(view.url);
         state.hls.attachMedia(video);
-        state.hls.on(globalThis.Hls.Events.MANIFEST_PARSED, () => reportSelectedCameraHealth(true, "hls"));
+        state.hls.on(globalThis.Hls.Events.MANIFEST_PARSED, () => reportSelectedCameraHealth(true, "hls", "", view.healthObservation || {}));
         state.hls.on(globalThis.Hls.Events.ERROR, (_event, data) => {
           if (data?.fatal) {
             reportSelectedCameraHealth(false, "hls", data.details || "HLS stream stopped responding");
@@ -4597,7 +4593,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       } else {
         video.src = view.url;
       }
-      video.addEventListener("playing", () => reportSelectedCameraHealth(true, view.type), { once: true });
+      video.addEventListener("playing", () => reportSelectedCameraHealth(true, view.type, "", view.healthObservation || {}), { once: true });
       video.addEventListener("error", () => {
         reportSelectedCameraHealth(false, view.type, "Browser could not play this video stream");
         showVideoError("The browser could not play this video stream.");
@@ -4654,13 +4650,13 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     }
   }
 
-  function reportSelectedCameraHealth(ok, mediaType, message = "") {
+  function reportSelectedCameraHealth(ok, mediaType, message = "", details = {}) {
     const id = state.selection?.type === "camera" ? state.selection.id : "";
     if (!id) return;
     fetch("/api/camera-health", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, ok: Boolean(ok), mediaType, message }),
+      body: JSON.stringify({ ...details, id, ok: Boolean(ok), mediaType, message }),
     }).catch(() => {});
   }
 
@@ -4912,10 +4908,18 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
 
   function cameraStatusLabel(camera) {
     if (state.downStreamIds.has(camera.id) || camera.healthStatus === "down") return "down";
+    if (camera.healthStatus === "degraded") return camera.healthFallbackUsed ? "working fallback" : "degraded";
     if (camera.healthStatus === "verified") return camera.capability === "player" || camera.capability === "stream" ? "verified live" : "verified";
     if (camera.capability === "candidate") return "unverified";
     if (camera.capability === "player" || camera.capability === "stream") return "live";
     return camera.category || "camera";
+  }
+
+  function cameraDisplayScore(camera) {
+    const playableBonus = camera.capability === "stream" || camera.capability === "player" ? 24 : camera.viewerType === "image" ? 10 : 0;
+    const health = Number.isFinite(Number(camera.healthScore)) ? Number(camera.healthScore) : 45;
+    const downPenalty = camera.healthStatus === "down" || state.downStreamIds.has(camera.id) ? 80 : 0;
+    return Number(camera.coveragePriority || 0) + health * 0.35 + playableBonus - downPenalty;
   }
 
   function activeCameraFilterLabel() {

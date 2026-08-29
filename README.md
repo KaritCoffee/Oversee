@@ -4,9 +4,10 @@ Free-source global situational-awareness desktop app.
 
 ## What It Does
 
-Oversee is a local-first operations console that fuses public geospatial data without pretending that best-effort sources are authoritative or always online. Version 3.2 adds area briefs, watched regions, bounded history playback, broader weather and disaster context, camera health checks, and release-quality diagnostics without crowding the primary globe.
+Oversee is a local-first operations console that fuses public geospatial data without pretending that best-effort sources are authoritative or always online. Version 3.3 expands the official no-key camera inventory and adds spatial deduplication, coverage balancing, scored media health, and automatic fallback selection.
 
 - Global camera inventory with official public adapters across the US, Canada, Europe, Asia, Australia, New Zealand, and Puerto Rico
+- No-key camera catalogs from Taiwan, BayernInfo, Vancouver, 511SC, 511NY, Idaho 511, New England 511, Atlantic Canada 511, Estonia, Iceland, and other public agencies
 - Cesium and lightweight operations globes with selectable cameras, satellites, flights, earthquakes, fires, alerts, population, vessels, missions, and radio
 - CelesTrak orbital elements with automatic SatNOGS fallback, propagated in the browser with SGP4
 - OpenSky public aircraft states with heading trails when anonymous rate limits allow access
@@ -24,7 +25,7 @@ Oversee is a local-first operations console that fuses public geospatial data wi
 - Optional live AIS vessel positions when the user supplies an AISStream key
 - Alert cards that show affected areas and center the 3D globe on the selected alert
 - Leaflet camera browser with viewport-scoped results, live/still filters, map marker control, and an adjacent watch pane
-- Source-aware health, stale-cache fallbacks, pinned assets, live motion trails, demo mode, and adaptive level-of-detail rendering
+- Source-aware health, validated alternate camera media, stale-cache fallbacks, pinned assets, live motion trails, demo mode, and adaptive level-of-detail rendering
 
 ## Free Now, Paid Later
 
@@ -115,7 +116,7 @@ Satellite positions and tracks are propagated from public two-line elements with
 
 The globe intentionally samples very large layers so the UI stays responsive. Use the camera browser and map for full camera inventory browsing; use the globe for situational context and quick selection.
 
-Some public cameras expose true live players or HLS playlists, while many transportation cameras expose refreshed still images. The UI labels those differently, validates HLS streams before playing them, and auto-refreshes still images so the dashboard does not pretend a still image is video.
+Some public cameras expose true live players or HLS playlists, while many transportation cameras expose refreshed still images. Oversee performs bounded content checks on direct video, HLS, and still-image endpoints, labels working fallbacks as degraded, and advances through alternate public media when a preferred endpoint fails. Stills auto-refresh without being presented as live video.
 
 The no-key road traffic layer is an illustrative time-of-day model over real OpenStreetMap road geometry, not a traffic observation. When a TomTom key is configured, road colors use TomTom Traffic Flow while the moving points remain illustrative. Both views are limited to city/metro zoom so global navigation does not waste public-service or keyed tile requests.
 

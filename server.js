@@ -11,6 +11,17 @@ const { satnogsRecordToGp } = require("./server-src/satellite-fallback.js");
 const { parseCensusPopulationCsv } = require("./server-src/census-population.js");
 const { RemoteMediaPolicy, isPublicIpAddress } = require("./server-src/remote-media-policy.js");
 const { CameraHealthRegistry, buildCameraCoverage } = require("./server-src/camera-health.js");
+const { cameraMediaCandidates, cameraQualityScore, canonicalCameraMediaUrl, deduplicateCameras } = require("./server-src/camera-catalog.js");
+const {
+  extractVancouverImageUrls,
+  fetchBayernCameras,
+  fetchCastleRockCameras,
+  fetchEstoniaCameras,
+  fetchIcelandCameras,
+  fetchScdotCameras,
+  fetchTaiwanCameras,
+  fetchVancouverCameras,
+} = require("./server-src/camera-adapters.js");
 const { HistoryStore } = require("./server-src/history-store.js");
 const { buildUpdateStatus } = require("./server-src/versioning.js");
 const {
@@ -32,7 +43,7 @@ const {
 } = require("./server-src/road-traffic.js");
 
 const ROOT = __dirname;
-const APP_VERSION = "3.2.0";
+const APP_VERSION = "3.3.0";
 const BUILT_FRONTEND_ROOT = path.join(ROOT, "dist");
 const STATIC_ROOT = process.env.OVERSEE_STATIC_ROOT
   ? path.resolve(process.env.OVERSEE_STATIC_ROOT)
@@ -93,7 +104,7 @@ const SOURCE_URLS = {
   northDakotaCameras: "https://travelfiles.dot.nd.gov/geojson_nc/cameras.json",
   ontario511Cameras: "https://511on.ca/api/v2/get/cameras?format=json",
   alberta511Cameras: "https://511.alberta.ca/api/v2/get/cameras?format=json",
-  hongKongTrafficCameras: "https://opendata.esrichina.hk/datasets/bdfd0ca3f731412d81391d00b721bd08_0.geojson?where=1%3D1",
+  hongKongTrafficCameras: "https://static.data.gov.hk/td/traffic-snapshot-images/code/Traffic_Camera_Locations_En.xml",
   madridTrafficKml: "http://datos.madrid.es/egob/catalogo/202088-0-trafico-camaras.kml",
   spainDgtCameras: "https://nap.dgt.es/datex2/v3/dgt/DevicePublication/camaras_datex2_v36.xml",
   fintrafficWeathercams: "https://tie.digitraffic.fi/api/weathercam/v1/stations",
@@ -106,6 +117,14 @@ const SOURCE_URLS = {
   nswTrafficCameras: "https://data.livetraffic.com/cameras/traffic-cam.json",
   nswTrafficCamerasApi: "https://api.transport.nsw.gov.au/v1/live/cameras",
   puertoRicoTrafficCameras: "https://its.act.pr.gov/en/Default.aspx/GetCctv",
+  taiwanCivilIotCameras: "https://sta.colife.org.tw/STA_CCTV/v1.0/Things",
+  bayernInfoCameras: "https://map.bayerninfo.de/cam/listOfWebcamsV3.json",
+  bayernInfoImageBase: "https://map.bayerninfo.de/cam/",
+  vancouverCameraCatalog: "https://opendata.vancouver.ca/api/explore/v2.1/catalog/datasets/web-cam-url-links/records",
+  scdotCameras: "https://sc.cdn.iteris-atis.com/geojson/icons/metadata/icons.cameras.geojson",
+  estoniaRoadCameras: "https://tarktee.transpordiamet.ee/tarktee/rest/services/tram/road_cameras/MapServer/0/query?where=1%3D1&outFields=*&outSR=4326&f=json",
+  estoniaCameraImages: "https://tarktee.transpordiamet.ee/images/",
+  icelandRoadCameras: "https://gagnaveita.vegagerdin.is/api/vefmyndavelar2014_1",
   wisconsin511Cameras: "https://511wi.gov/api/v2/get/cameras",
   louisiana511Cameras: "https://511la.org/api/v2/get/cameras",
   driveNcCameras: "https://nc.prod.traveliq.co/api/v2/get/cameras",
@@ -115,6 +134,57 @@ const SOURCE_URLS = {
   ],
   tomTomTrafficFlow: "https://api.tomtom.com/traffic/map/4/tile/flow/relative0",
 };
+
+const CASTLE_ROCK_CAMERA_SOURCES = [
+  {
+    id: "ny511-public",
+    name: "511NY Traffic Cameras",
+    baseUrl: "https://511ny.org",
+    officialUrl: "https://511ny.org/list/cameras",
+    region: "New York",
+    country: "United States",
+  },
+  {
+    id: "id511-public",
+    name: "Idaho 511 Traffic Cameras",
+    baseUrl: "https://511.idaho.gov",
+    officialUrl: "https://511.idaho.gov/list/cameras",
+    region: "Idaho",
+    country: "United States",
+  },
+  {
+    id: "newengland511-public",
+    name: "New England 511 Traffic Cameras",
+    baseUrl: "https://newengland511.org",
+    officialUrl: "https://newengland511.org/list/cameras",
+    region: "New England",
+    country: "United States",
+  },
+  {
+    id: "alberta511-public",
+    name: "Alberta 511 Traffic Cameras",
+    baseUrl: "https://511.alberta.ca",
+    officialUrl: "https://511.alberta.ca/list/cameras",
+    region: "Alberta",
+    country: "Canada",
+  },
+  {
+    id: "novascotia511-public",
+    name: "Nova Scotia 511 Traffic Cameras",
+    baseUrl: "https://511.novascotia.ca",
+    officialUrl: "https://511.novascotia.ca/list/cameras",
+    region: "Nova Scotia",
+    country: "Canada",
+  },
+  {
+    id: "newbrunswick511-public",
+    name: "New Brunswick 511 Traffic Cameras",
+    baseUrl: "https://511.gnb.ca",
+    officialUrl: "https://511.gnb.ca/list/cameras",
+    region: "New Brunswick",
+    country: "Canada",
+  },
+];
 
 const GIBS_TEXTURES = {
   nasa: {
@@ -427,6 +497,7 @@ const CENSUS_STATE_CENTROIDS = {
 
 const CALTRANS_DISTRICTS = Array.from({ length: 12 }, (_, index) => index + 1);
 const DYNAMIC_CAMERAS_BY_ID = new Map();
+const MEDIA_REQUEST_HEADERS_BY_URL = new Map();
 const CELESTRAK_FALLBACK_GROUPS = ["visual", "stations", "starlink", "gps-ops", "gnss", "geo", "weather", "resource"];
 
 const ARCGIS_CAMERA_SOURCES = [
@@ -730,7 +801,7 @@ const historyStore = new HistoryStore({
 });
 const cameraHealthRegistry = new CameraHealthRegistry({
   filePath: path.join(RUNTIME_CACHE_DIR, "camera-health-v1.json"),
-  maxRecords: 8000,
+  maxRecords: 60000,
 });
 const cameraHealthSweep = {
   running: false,
@@ -841,6 +912,12 @@ const server = http.createServer(async (request, response) => {
         ok: payload.ok,
         mediaType: payload.mediaType,
         message: payload.message,
+        fallbackUsed: payload.fallbackUsed,
+        degraded: payload.degraded,
+        latencyMs: payload.latencyMs,
+        statusCode: payload.statusCode,
+        contentType: payload.contentType,
+        bytesChecked: payload.bytesChecked,
       }));
     }
 
@@ -1207,21 +1284,34 @@ async function buildCameraSet(scope = "world") {
   const externalCameras = adapterResults.flatMap((result) => result.data || []);
   const sourceHealth = [
     { name: "Local public camera catalog", ok: true, count: filterGeoItems(localCameras, bounds).length, source: "local" },
-    ...adapterSpecs.map((adapter, index) => healthFromResult(adapter.name, adapterResults[index], filterGeoItems(adapterResults[index].data || [], bounds).length)),
+    ...adapterSpecs.map((adapter, index) => healthFromResult(
+      adapter.name,
+      adapterResults[index],
+      filterGeoItems(adapterResults[index].data || [], bounds).length,
+      { requireItems: true, sourceCount: (adapterResults[index].data || []).length }
+    )),
   ];
 
-  const cameras = [...localCameras, ...externalCameras]
+  const scopedCameras = [...localCameras, ...externalCameras]
     .filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng))
-    .filter((camera) => !bounds || bounds === SCOPE_BOUNDS.world || inBounds(camera, bounds))
-    .sort(compareCameras)
+    .filter((camera) => !bounds || bounds === SCOPE_BOUNDS.world || inBounds(camera, bounds));
+  const deduplicated = deduplicateCameras(scopedCameras, {
+    statusFor: (id) => cameraHealthRegistry.status(id),
+  });
+  const cameras = deduplicated.cameras
     .map((camera) => cameraHealthRegistry.decorate(camera));
+  cameras.sort(compareCameras);
 
   rememberDynamicCameras(cameras);
   rememberProxyImageHosts(cameras);
   return {
     data: cameras,
     health: sourceHealth,
-    coverage: { ...buildCameraCoverage(cameras), health: cameraHealthRegistry.summary(cameras) },
+    coverage: {
+      ...buildCameraCoverage(cameras),
+      health: cameraHealthRegistry.summary(cameras),
+      deduplication: deduplicated.stats,
+    },
   };
 }
 
@@ -1239,13 +1329,14 @@ async function runCameraHealthSweep(options = {}) {
   cameraHealthSweep.message = "Checking a bounded sample of public camera media";
   try {
     const cameraSet = await buildCameraSet("world");
-    const limit = clampInt(options.limit, 1, 24, 8);
+    const limit = clampInt(options.limit, 1, 24, 18);
     const candidates = selectCameraHealthCandidates(cameraSet.data, limit);
     const observations = await mapLimit(candidates, 4, async (camera) => {
       try {
         const view = await resolveFeedView(camera.id);
         const ok = isHealthyCameraView(view);
         cameraHealthRegistry.record(camera.id, {
+          ...(view?.healthObservation || {}),
           ok,
           mediaType: view?.type || camera.viewerType,
           message: ok ? "" : view?.offlineReason || view?.note || "Public media did not validate",
@@ -1276,7 +1367,16 @@ async function runCameraHealthSweep(options = {}) {
 function selectCameraHealthCandidates(cameras, limit) {
   const now = Date.now();
   const eligible = cameras
-    .filter((camera) => !camera.personal && (camera.capability === "stream" || camera.capability === "player" || camera.capability === "candidate" || camera.viewerType === "hls" || camera.viewerType === "video"))
+    .filter((camera) => !camera.personal && (
+      camera.capability === "stream"
+      || camera.capability === "player"
+      || camera.capability === "candidate"
+      || camera.capability === "snapshot"
+      || camera.viewerType === "image"
+      || camera.viewerType === "hls"
+      || camera.viewerType === "video"
+      || camera.resolverType
+    ))
     .map((camera) => ({ camera, health: cameraHealthRegistry.status(camera.id) }))
     .filter(({ health }) => {
       const age = now - Date.parse(health.lastCheckedAt || 0);
@@ -1285,13 +1385,34 @@ function selectCameraHealthCandidates(cameras, limit) {
       return true;
     });
   const byOldest = (left, right) => Date.parse(left.health.lastCheckedAt || 0) - Date.parse(right.health.lastCheckedAt || 0);
-  const down = eligible.filter((entry) => entry.health.status === "down").sort(byOldest).slice(0, Math.min(3, limit));
-  const unverified = eligible.filter((entry) => entry.health.status === "unverified").sort(byOldest).slice(0, Math.max(0, limit - down.length));
-  const selected = [...down, ...unverified];
+  const balanced = (entries, count) => spatialCameraHealthSample(entries.sort(byOldest), count);
+  const down = balanced(eligible.filter((entry) => entry.health.status === "down"), Math.min(3, limit));
+  const degraded = balanced(eligible.filter((entry) => entry.health.status === "degraded"), Math.min(3, Math.max(0, limit - down.length)));
+  const unverified = balanced(eligible.filter((entry) => entry.health.status === "unverified"), Math.max(0, limit - down.length - degraded.length));
+  const selected = [...down, ...degraded, ...unverified];
   if (selected.length < limit) {
-    selected.push(...eligible.filter((entry) => entry.health.status === "verified").sort(byOldest).slice(0, limit - selected.length));
+    selected.push(...balanced(eligible.filter((entry) => entry.health.status === "verified"), limit - selected.length));
   }
   return selected.map((entry) => entry.camera);
+}
+
+function spatialCameraHealthSample(entries, limit) {
+  if (entries.length <= limit) return entries;
+  const cells = new Map();
+  for (const entry of entries) {
+    const key = `${Math.floor((Number(entry.camera.lat) + 90) / 10)}:${Math.floor((Number(entry.camera.lng) + 180) / 10)}`;
+    const values = cells.get(key) || [];
+    values.push(entry);
+    cells.set(key, values);
+  }
+  const queues = [...cells.values()];
+  const output = [];
+  while (output.length < limit && queues.some((queue) => queue.length)) {
+    for (const queue of queues) {
+      if (queue.length && output.length < limit) output.push(queue.shift());
+    }
+  }
+  return output;
 }
 
 function isHealthyCameraView(view) {
@@ -1685,6 +1806,24 @@ function cameraAdapterSpecs(scope) {
       ttlMs: 2 * 60 * 1000,
       fetcher: fetchAustinTrafficCameras,
     });
+    adapters.push({
+      key: "cameras:scdot-511",
+      name: "511SC Traffic Cameras",
+      ttlMs: 2 * 60 * 1000,
+      fetcher: () => fetchScdotCameras({
+        fetchJson,
+        sourceUrl: SOURCE_URLS.scdotCameras,
+        officialUrl: "https://www.511sc.org/",
+      }),
+    });
+    for (const source of CASTLE_ROCK_CAMERA_SOURCES.filter((item) => item.country === "United States")) {
+      adapters.push({
+        key: `cameras:public-511:${source.id}`,
+        name: source.name,
+        ttlMs: 5 * 60 * 1000,
+        fetcher: () => fetchCastleRockCameras({ fetchJson, source }),
+      });
+    }
     const wisconsinKey = getConfiguredSecret("wisconsin511ApiKey", ["WISCONSIN_511_API_KEY", "WI511_API_KEY"]);
     if (wisconsinKey) {
       adapters.push({
@@ -1741,6 +1880,66 @@ function cameraAdapterSpecs(scope) {
     }
   }
   if (scope === "world") {
+    adapters.push({
+      key: "cameras:taiwan-civil-iot",
+      name: "Taiwan Civil IoT CCTV",
+      ttlMs: 5 * 60 * 1000,
+      fetcher: () => fetchTaiwanCameras({
+        fetchJson,
+        sourceUrl: SOURCE_URLS.taiwanCivilIotCameras,
+        officialUrl: "https://ci.taiwan.gov.tw/dsp/Views/api_guide/STA_example.aspx",
+      }),
+    });
+    adapters.push({
+      key: "cameras:bayerninfo",
+      name: "BayernInfo Traffic Cameras",
+      ttlMs: 5 * 60 * 1000,
+      fetcher: () => fetchBayernCameras({
+        fetchJson,
+        sourceUrl: SOURCE_URLS.bayernInfoCameras,
+        imageBaseUrl: SOURCE_URLS.bayernInfoImageBase,
+        officialUrl: "https://www.bayerninfo.de/de/verkehrskameras",
+      }),
+    });
+    adapters.push({
+      key: "cameras:vancouver-open-data",
+      name: "City of Vancouver Traffic Cameras",
+      ttlMs: 10 * 60 * 1000,
+      fetcher: () => fetchVancouverCameras({
+        fetchJson,
+        sourceUrl: SOURCE_URLS.vancouverCameraCatalog,
+        officialUrl: "https://opendata.vancouver.ca/explore/dataset/web-cam-url-links/api/",
+      }),
+    });
+    adapters.push({
+      key: "cameras:estonia-road",
+      name: "Estonian Transport Administration Cameras",
+      ttlMs: 5 * 60 * 1000,
+      fetcher: () => fetchEstoniaCameras({
+        fetchJson,
+        sourceUrl: SOURCE_URLS.estoniaRoadCameras,
+        imageBaseUrl: SOURCE_URLS.estoniaCameraImages,
+        officialUrl: "https://tarktee.mnt.ee/",
+      }),
+    });
+    adapters.push({
+      key: "cameras:iceland-road",
+      name: "Icelandic Road and Coastal Administration Cameras",
+      ttlMs: 5 * 60 * 1000,
+      fetcher: () => fetchIcelandCameras({
+        fetchJson,
+        sourceUrl: SOURCE_URLS.icelandRoadCameras,
+        officialUrl: "https://umferdin.is/en",
+      }),
+    });
+    for (const source of CASTLE_ROCK_CAMERA_SOURCES.filter((item) => item.country === "Canada")) {
+      adapters.push({
+        key: `cameras:public-511:${source.id}`,
+        name: source.name,
+        ttlMs: 5 * 60 * 1000,
+        fetcher: () => fetchCastleRockCameras({ fetchJson, source }),
+      });
+    }
     adapters.push({
       key: "cameras:tfl-jamcams",
       name: "Transport for London JamCams",
@@ -1859,13 +2058,20 @@ function rememberDynamicCameras(cameras) {
 
 function rememberProxyImageHosts(items) {
   for (const item of items || []) {
-    for (const value of [
-      item?.imageUrl,
-      item?.previewUrl,
-      item?.shakeMap?.intensityMap,
-      item?.shakeMap?.pgaMap,
-    ]) {
-      if (value) remoteMediaPolicy.remember(value);
+    const media = [
+      { url: item?.imageUrl, requestHeaders: item?.requestHeaders },
+      { url: item?.previewUrl, requestHeaders: item?.requestHeaders },
+      { url: item?.streamUrl, requestHeaders: item?.requestHeaders },
+      ...(item?.fallbackViews || []).map((view) => ({ url: view?.url, requestHeaders: view?.requestHeaders })),
+      { url: item?.shakeMap?.intensityMap },
+      { url: item?.shakeMap?.pgaMap },
+    ];
+    for (const candidate of media) {
+      if (!candidate.url) continue;
+      remoteMediaPolicy.remember(candidate.url);
+      if (candidate.requestHeaders) {
+        MEDIA_REQUEST_HEADERS_BY_URL.set(canonicalCameraMediaUrl(candidate.url) || candidate.url, candidate.requestHeaders);
+      }
     }
   }
 }
@@ -1877,7 +2083,11 @@ function compareCameras(left, right) {
     if (camera.viewerType === "image") return 2;
     return 3;
   };
-  return rank(left) - rank(right) || String(left.sourceName || "").localeCompare(String(right.sourceName || "")) || String(left.name || "").localeCompare(String(right.name || ""));
+  return rank(left) - rank(right)
+    || cameraQualityScore(right, right) - cameraQualityScore(left, left)
+    || Number(right.coveragePriority || 0) - Number(left.coveragePriority || 0)
+    || String(left.sourceName || "").localeCompare(String(right.sourceName || ""))
+    || String(left.name || "").localeCompare(String(right.name || ""));
 }
 
 async function fetchNycTrafficCameras() {
@@ -1973,24 +2183,26 @@ async function fetchTflJamCams() {
 }
 
 async function fetchHongKongTrafficCameras() {
-  const data = await fetchJson(SOURCE_URLS.hongKongTrafficCameras, { timeoutMs: 18000 });
-  return (data.features || [])
-    .map((feature) => {
-      const props = feature.properties || {};
-      const [x, y] = feature.geometry?.coordinates || [];
-      const point = webMercatorToLatLng(Number(x), Number(y));
-      const imageUrl = normalizeUrl(props.url);
-      if (!point || !imageUrl) return null;
-      const name = cleanCameraText(props.description || props.F_key || "Hong Kong traffic camera");
-      const district = cleanCameraText(props.district || props.region || "Hong Kong");
+  const xml = await fetchText(SOURCE_URLS.hongKongTrafficCameras, { timeoutMs: 18000, accept: "application/xml, text/xml, */*" });
+  const images = String(xml || "").match(/<image>[\s\S]*?<\/image>/gi) || [];
+  return images
+    .map((image) => {
+      const key = cleanCameraText(firstRegex(image, /<key>([\s\S]*?)<\/key>/i));
+      const lat = Number(firstRegex(image, /<latitude>([^<]+)<\/latitude>/i));
+      const lng = Number(firstRegex(image, /<longitude>([^<]+)<\/longitude>/i));
+      const imageUrl = normalizeUrl(firstRegex(image, /<url>([\s\S]*?)<\/url>/i));
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || !imageUrl) return null;
+      const name = cleanCameraText(firstRegex(image, /<description>([\s\S]*?)<\/description>/i) || key || "Hong Kong traffic camera");
+      const district = cleanCameraText(firstRegex(image, /<district>([\s\S]*?)<\/district>/i) || "Hong Kong");
+      const region = cleanCameraText(firstRegex(image, /<region>([\s\S]*?)<\/region>/i) || "Hong Kong");
       return {
-        id: `hk-td-${slugify(props.F_key || name)}`,
+        id: `hk-td-${slugify(key || name)}`,
         dynamic: true,
         type: "camera",
         name,
         shortName: shortCameraName(name),
         area: district,
-        region: cleanCameraText(props.region || "Hong Kong"),
+        region,
         county: district,
         country: "Hong Kong",
         category: "traffic",
@@ -2003,8 +2215,8 @@ async function fetchHongKongTrafficCameras() {
         sourceUrl: SOURCE_URLS.hongKongTrafficCameras,
         officialUrl: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images",
         sourcePageUrl: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images",
-        lat: point.lat,
-        lng: point.lng,
+        lat,
+        lng,
         viewerType: "image",
         capability: "snapshot",
         capabilityLabel: "Current Still",
@@ -3082,6 +3294,19 @@ async function resolveKnownPlayerView(feed, meta = {}) {
   }
 
   if (stillUrl) {
+    remoteMediaPolicy.remember(stillUrl);
+    const imageStatus = await verifyImageAsset(stillUrl);
+    if (!imageStatus.ok) {
+      return {
+        type: "unavailable",
+        url: "",
+        sourcePageUrl: known.sourcePageUrl || feed.url,
+        capability: "source",
+        streamStatus: "down",
+        offlineReason: imageStatus.message || status.message,
+        note: "Neither the embedded player nor its public still fallback responded correctly.",
+      };
+    }
     return {
       type: "image",
       url: stillUrl,
@@ -3090,7 +3315,19 @@ async function resolveKnownPlayerView(feed, meta = {}) {
       capability: "snapshot",
       sourcePageUrl: known.sourcePageUrl || feed.url,
       sourceLabel: "Current still fallback",
-      offlineReason: status.message,
+      primaryFailure: status.message,
+      fallbackUsed: true,
+      streamStatus: "degraded",
+      healthObservation: {
+        ok: true,
+        degraded: true,
+        fallbackUsed: true,
+        mediaType: "image",
+        latencyMs: imageStatus.latencyMs,
+        statusCode: imageStatus.statusCode,
+        contentType: imageStatus.contentType,
+        bytesChecked: imageStatus.bytesChecked,
+      },
     };
   }
 
@@ -3111,7 +3348,7 @@ async function verifyKnownEmbedPlayer(view) {
   const result = await getCached(`embed:${view.url}`, 2 * 60 * 1000, async () => {
     const response = await fetch(view.url, {
       headers: {
-        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
+        "User-Agent": `Oversee/${APP_VERSION} (+local public intelligence dashboard)`,
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
       },
       signal: AbortSignal.timeout(8000),
@@ -3151,7 +3388,9 @@ async function resolveFeedView(feedId) {
         sourceLabel: "Embedded player offline; current still fallback",
         sourcePageUrl: knownView.sourcePageUrl || feed.url,
         capability: "snapshot",
-        streamStatus: "down",
+        streamStatus: "degraded",
+        fallbackUsed: true,
+        healthObservation: knownView.healthObservation,
         note: `The embedded public player reports it is not live right now. Showing the refreshed still image instead.`,
       };
     }
@@ -3249,117 +3488,236 @@ async function resolveDynamicFeedView(camera) {
     capability: camera.capability || "snapshot",
     refreshSeconds: camera.refreshSeconds || 60,
   };
-
-  if (camera.viewerType === "video" && camera.streamUrl) {
-    const videoResult = await verifyVideoAsset(camera.streamUrl);
-    if (videoResult.ok) {
-      return {
-        ...base,
-        type: "video",
-        url: camera.streamUrl,
-        sourceLabel: `${camera.sourceName || "Public source"} public video feed`,
-        capability: "stream",
-        note: "This source exposes a direct public video asset, so the dashboard can play it in-pane.",
-      };
-    }
-
-    if (camera.imageUrl) {
-      return {
-        ...base,
-        type: "image",
-        url: camera.imageUrl,
-        sourceLabel: `${camera.sourceName || "Public source"} current image fallback`,
-        capability: "snapshot",
-        streamStatus: "down",
-        note: `The source advertises a video asset, but it did not validate right now (${videoResult.message || "unavailable"}). Showing the refreshed public image instead.`,
-      };
-    }
-  }
-
-  if (camera.viewerType === "hls" && camera.streamUrl) {
-    const hlsResult = await verifyHlsPlaylist(camera.streamUrl);
-    if (hlsResult.ok) {
-      return {
-        ...base,
-        type: "hls",
-        url: camera.streamUrl,
-        sourceLabel: `${camera.sourceName || "Public source"} live HLS stream`,
-        capability: "player",
-        note: "This source exposes a direct HLS playlist, so the dashboard can play it in-pane.",
-      };
-    }
-
-    if (camera.imageUrl) {
-      return {
-        ...base,
-        type: "image",
-        url: camera.imageUrl,
-        sourceLabel: `${camera.sourceName || "Public source"} current image fallback`,
-        capability: "snapshot",
-        streamStatus: "down",
-        note: `The source advertises a video stream, but it did not validate right now (${hlsResult.message || "unavailable"}). Showing the refreshed public image instead.`,
-      };
-    }
-  }
-
-  if (camera.imageUrl || camera.previewUrl) {
+  const candidates = await resolveCameraMediaCandidates(camera);
+  if (!candidates.length) {
     return {
       ...base,
-      type: "image",
-      url: camera.imageUrl || camera.previewUrl,
-      sourceLabel: `${camera.sourceName || "Public source"} current image`,
-      capability: "snapshot",
-      note: "This public source exposes a refreshed image feed rather than a browser-playable video stream.",
+      type: "iframe",
+      url: camera.sourcePageUrl || camera.officialUrl || camera.sourceUrl,
+      sourceLabel: camera.sourceName || "Official public source page",
+      capability: "source",
+      note: "No direct dashboard media endpoint has been verified for this camera.",
     };
   }
 
+  const failures = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const result = await verifyCameraMediaCandidate(candidate);
+    if (!result.ok) {
+      failures.push(result.message || `${candidate.type} unavailable`);
+      continue;
+    }
+    const fallbackUsed = index > 0 || !candidate.primary;
+    const type = candidate.type;
+    const capability = type === "hls" ? "player" : type === "video" ? "stream" : "snapshot";
+    const fallbackNote = fallbackUsed
+      ? `The preferred camera media did not validate, so Oversee selected a working ${type === "image" ? "still image" : "alternate feed"} automatically.`
+      : type === "image"
+        ? "This public source exposes a refreshed image feed rather than a browser-playable video stream."
+        : "This direct public video feed passed a bounded availability check.";
+    return {
+      ...base,
+      type,
+      url: candidate.url,
+      sourcePageUrl: candidate.sourcePageUrl || base.sourcePageUrl,
+      sourceLabel: `${candidate.sourceName || camera.sourceName || "Public source"}${fallbackUsed ? " fallback" : ""}`,
+      capability,
+      refreshSeconds: candidate.refreshSeconds || base.refreshSeconds,
+      streamStatus: fallbackUsed ? "degraded" : "verified",
+      fallbackUsed,
+      fallbackIndex: index,
+      note: fallbackNote,
+      healthObservation: {
+        ok: true,
+        degraded: fallbackUsed,
+        fallbackUsed,
+        mediaType: type,
+        sourceName: candidate.sourceName || camera.sourceName || "",
+        latencyMs: result.latencyMs,
+        statusCode: result.statusCode,
+        contentType: result.contentType,
+        bytesChecked: result.bytesChecked,
+      },
+    };
+  }
+
+  const message = failures[0] || "Public camera media did not validate";
   return {
     ...base,
-    type: "iframe",
-    url: camera.sourcePageUrl || camera.officialUrl || camera.sourceUrl,
-    sourceLabel: camera.sourceName || "Official public source page",
+    type: "unavailable",
+    url: "",
+    sourceLabel: camera.sourceName || "Public camera source",
     capability: "source",
-    note: "No direct dashboard media endpoint has been verified for this camera.",
+    streamStatus: "down",
+    offlineReason: message,
+    note: `None of this camera's ${candidates.length} public media option${candidates.length === 1 ? "" : "s"} responded correctly. The source link is still available.`,
+    healthObservation: {
+      ok: false,
+      mediaType: candidates[0]?.type || camera.viewerType,
+      sourceName: camera.sourceName || "",
+      message,
+    },
   };
 }
 
-async function verifyHlsPlaylist(url) {
-  const result = await getCached(`hls:${url}`, 5 * 60 * 1000, async () => {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
-        Accept: "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.9, */*;q=0.8",
-      },
-      signal: AbortSignal.timeout(7000),
-    });
-    if (!response.ok) throw new Error(`stream returned ${response.status}`);
-    const text = await response.text();
-    if (!/^#EXTM3U/m.test(text)) throw new Error("response is not an HLS playlist");
-    return { ok: true };
+async function resolveCameraMediaCandidates(camera) {
+  const candidates = cameraMediaCandidates(camera);
+  if (camera.resolverType !== "vancouver-page" || !camera.resolverUrl) return candidates;
+  const page = await getCached(`media-page:${hashString(camera.resolverUrl)}`, 2 * 60 * 1000, () => fetchText(camera.resolverUrl, {
+    timeoutMs: 10000,
+    accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+  }), { persist: false });
+  if (!page.ok) return candidates;
+  const discovered = extractVancouverImageUrls(page.data, camera.resolverUrl).map((url, index) => {
+    remoteMediaPolicy.remember(url);
+    return {
+      key: `image|${canonicalCameraMediaUrl(url) || url}`,
+      type: "image",
+      url,
+      sourceName: camera.sourceName,
+      sourcePageUrl: camera.sourcePageUrl,
+      refreshSeconds: camera.refreshSeconds || 60,
+      primary: index === 0 && candidates.length === 0,
+    };
   });
-
-  return result.ok ? { ok: true } : { ok: false, message: result.message || "stream unavailable" };
+  const seen = new Set();
+  return [...candidates, ...discovered].filter((candidate) => {
+    if (seen.has(candidate.key)) return false;
+    seen.add(candidate.key);
+    return true;
+  });
 }
 
-async function verifyVideoAsset(url) {
-  const result = await getCached(`video:${url}`, 5 * 60 * 1000, async () => {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
-        Accept: "video/*,*/*;q=0.8",
-        Range: "bytes=0-1",
-      },
-      signal: AbortSignal.timeout(5500),
+async function verifyCameraMediaCandidate(candidate) {
+  if (candidate.type === "hls") return verifyHlsPlaylist(candidate.url, candidate.requestHeaders);
+  if (candidate.type === "video") return verifyVideoAsset(candidate.url, candidate.requestHeaders);
+  return verifyImageAsset(candidate.url, candidate.requestHeaders);
+}
+
+async function verifyHlsPlaylist(url, requestHeaders) {
+  const result = await getCached(`hls:${canonicalCameraMediaUrl(url) || url}`, 5 * 60 * 1000, async () => {
+    const startedAt = Date.now();
+    const { response } = await fetchValidatedMedia(url, {
+      requestHeaders,
+      accept: "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.9, */*;q=0.8",
+      timeoutMs: 7000,
+    });
+    if (!response.ok) throw new Error(`stream returned ${response.status}`);
+    const prefix = await readResponsePrefix(response, 128 * 1024);
+    const text = prefix.toString("utf8");
+    if (!/^#EXTM3U/m.test(text)) throw new Error("response is not an HLS playlist");
+    return mediaCheckResult(response, prefix.length, Date.now() - startedAt);
+  }, { persist: false });
+  return result.ok ? result.data : { ok: false, message: result.message || "stream unavailable" };
+}
+
+async function verifyVideoAsset(url, requestHeaders) {
+  const result = await getCached(`video:${canonicalCameraMediaUrl(url) || url}`, 5 * 60 * 1000, async () => {
+    const startedAt = Date.now();
+    const { response } = await fetchValidatedMedia(url, {
+      requestHeaders,
+      accept: "video/*,*/*;q=0.8",
+      range: "bytes=0-1023",
+      timeoutMs: 6000,
     });
     if (!response.ok && response.status !== 206) throw new Error(`video returned ${response.status}`);
     const contentType = response.headers.get("content-type") || "";
     if (contentType && !/video|octet-stream|binary/i.test(contentType) && !/\.(?:mp4|m4v|webm)(?:$|\?)/i.test(url)) {
       throw new Error(`unexpected content type ${contentType}`);
     }
-    return { ok: true };
-  });
+    const prefix = await readResponsePrefix(response, 1024);
+    if (!prefix.length) throw new Error("video returned an empty response");
+    return mediaCheckResult(response, prefix.length, Date.now() - startedAt);
+  }, { persist: false });
+  return result.ok ? result.data : { ok: false, message: result.message || "video unavailable" };
+}
 
-  return result.ok ? { ok: true } : { ok: false, message: result.message || "video unavailable" };
+async function verifyImageAsset(url, requestHeaders) {
+  const result = await getCached(`image-health:${canonicalCameraMediaUrl(url) || url}`, 2 * 60 * 1000, async () => {
+    const startedAt = Date.now();
+    const { response } = await fetchValidatedMedia(url, {
+      requestHeaders,
+      accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      range: "bytes=0-65535",
+      timeoutMs: 8000,
+    });
+    if (!response.ok && response.status !== 206) throw new Error(`image returned ${response.status}`);
+    const prefix = await readResponsePrefix(response, 64 * 1024);
+    const contentType = response.headers.get("content-type") || "";
+    if (!prefix.length) throw new Error("image returned an empty response");
+    if (!/^image\//i.test(contentType) && !hasImageSignature(prefix)) {
+      throw new Error(`unexpected content type ${contentType || "unknown"}`);
+    }
+    if (/^text\/html/i.test(contentType) || /^\s*</.test(prefix.toString("utf8", 0, Math.min(prefix.length, 80)))) {
+      throw new Error("image endpoint returned a web page");
+    }
+    return mediaCheckResult(response, prefix.length, Date.now() - startedAt);
+  }, { persist: false });
+  return result.ok ? result.data : { ok: false, message: result.message || "image unavailable" };
+}
+
+async function fetchValidatedMedia(value, options = {}) {
+  let current = String(value || "");
+  for (let redirects = 0; redirects <= 3; redirects += 1) {
+    const target = await remoteMediaPolicy.authorize(current);
+    const rememberedHeaders = MEDIA_REQUEST_HEADERS_BY_URL.get(canonicalCameraMediaUrl(current) || current) || {};
+    const response = await fetch(target, {
+      redirect: "manual",
+      headers: {
+        "User-Agent": MEDIA_USER_AGENT,
+        Accept: options.accept || "*/*",
+        ...(options.range ? { Range: options.range } : {}),
+        ...rememberedHeaders,
+        ...(options.requestHeaders || {}),
+      },
+      signal: AbortSignal.timeout(options.timeoutMs || 8000),
+    });
+    if (response.status < 300 || response.status >= 400) return { response, url: target.href };
+    const location = response.headers.get("location");
+    if (!location || redirects === 3) throw new Error("media redirect could not be resolved safely");
+    current = new URL(location, target).href;
+    remoteMediaPolicy.remember(current);
+  }
+  throw new Error("too many media redirects");
+}
+
+async function readResponsePrefix(response, maxBytes) {
+  if (!response.body?.getReader) return Buffer.from(await response.arrayBuffer()).subarray(0, maxBytes);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      const remaining = maxBytes - total;
+      chunks.push(chunk.length > remaining ? chunk.subarray(0, remaining) : chunk);
+      total += Math.min(chunk.length, remaining);
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function hasImageSignature(buffer) {
+  if (buffer.length < 4) return false;
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) return true;
+  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return true;
+  if (/^GIF8[79]a/.test(buffer.toString("ascii", 0, 6))) return true;
+  return buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP";
+}
+
+function mediaCheckResult(response, bytesChecked, latencyMs) {
+  return {
+    ok: true,
+    statusCode: response.status,
+    contentType: response.headers.get("content-type") || "",
+    bytesChecked,
+    latencyMs,
+  };
 }
 
 async function fetchSatellites(scope) {
@@ -4533,9 +4891,10 @@ function writeRuntimeCache(key, data, updatedAt) {
 }
 
 function healthFromResult(name, result, count, options = {}) {
+  const unexpectedlyEmpty = Boolean(options.requireItems && result.ok && Number(options.sourceCount ?? count) === 0);
   return {
     name,
-    ok: result.ok,
+    ok: result.ok && !unexpectedlyEmpty,
     count,
     cached: result.cached,
     stale: result.stale || false,
@@ -4543,7 +4902,7 @@ function healthFromResult(name, result, count, options = {}) {
     configured: options.configured ?? true,
     updatedAt: result.updatedAt ? new Date(result.updatedAt).toISOString() : "",
     staleAfterMs: Number(options.staleAfterMs || 0),
-    message: result.message || "",
+    message: unexpectedlyEmpty ? "Source responded but returned no camera records" : result.message || "",
   };
 }
 
@@ -4551,7 +4910,7 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
+      "User-Agent": `Oversee/${APP_VERSION} (+local public intelligence dashboard)`,
       Accept: "application/geo+json, application/json, text/plain;q=0.9, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -4567,7 +4926,7 @@ async function fetchText(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
+      "User-Agent": `Oversee/${APP_VERSION} (+local public intelligence dashboard)`,
       Accept: options.accept || "text/plain, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -4750,7 +5109,7 @@ async function proxyTrafficFlowTile(tile, response) {
   try {
     const upstream = await fetch(upstreamUrl, {
       headers: {
-        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
+        "User-Agent": `Oversee/${APP_VERSION} (+local public intelligence dashboard)`,
         Accept: "image/png, application/json;q=0.8",
       },
       signal: AbortSignal.timeout(9000),
@@ -4840,7 +5199,7 @@ function fetchLegacyResource(url, options = {}) {
     const request = https.request(url, {
       method: options.method || "GET",
       headers: {
-        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
+        "User-Agent": `Oversee/${APP_VERSION} (+local public intelligence dashboard)`,
         Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
         ...(body ? { "Content-Length": body.length } : {}),
         ...(options.headers || {}),
@@ -4896,7 +5255,7 @@ async function proxyGibsTexture(requestUrl, response) {
   const result = await getCached(cacheKey, 6 * 60 * 60 * 1000, async () => {
     const upstream = await fetch(gibsUrl, {
       headers: {
-        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
+        "User-Agent": `Oversee/${APP_VERSION} (+local public intelligence dashboard)`,
         Accept: `${view.format}, image/*;q=0.9, */*;q=0.5`,
       },
       signal: AbortSignal.timeout(14000),
@@ -4970,17 +5329,19 @@ async function proxyImage(imageUrl, response) {
       response.end(legacy.buffer);
       return;
     }
-    const upstream = await fetch(imageUrl, {
-      headers: {
-        "User-Agent": MEDIA_USER_AGENT,
-        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-      },
-      signal: AbortSignal.timeout(8000),
+    const requestHeaders = MEDIA_REQUEST_HEADERS_BY_URL.get(canonicalCameraMediaUrl(imageUrl) || imageUrl);
+    const { response: upstream } = await fetchValidatedMedia(imageUrl, {
+      requestHeaders,
+      accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+      timeoutMs: 8000,
     });
     if (!upstream.ok) throw new Error(`Image upstream returned ${upstream.status}`);
     const contentType = upstream.headers.get("content-type") || "image/jpeg";
     if (!/^image\//i.test(contentType)) throw new Error(`Image upstream returned ${contentType}`);
+    const contentLength = Number(upstream.headers.get("content-length") || 0);
+    if (contentLength > 20 * 1024 * 1024) throw new Error("Image upstream exceeded the 20 MB safety limit");
     const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.length > 20 * 1024 * 1024) throw new Error("Image upstream exceeded the 20 MB safety limit");
     response.writeHead(200, {
       "Content-Type": contentType,
       "Cache-Control": "no-cache",
