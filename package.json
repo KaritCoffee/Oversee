@@ -1,6 +1,6 @@
 {
   "name": "oversee",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "private": true,
   "description": "Oversee public geospatial dashboard",
   "scripts": {
@@ -8,7 +8,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
     "test": "node --test src/**/*.test.mjs server-src/**/*.test.cjs",
-    "check": "node --check server.js && npm run test && npm run build",
+    "check:version": "node scripts/check-version-sync.mjs",
+    "check": "npm run check:version && node --check server.js && node --check assets/app.js && npm run test && npm run build",
     "predesktop:build": "npm run build && node scripts/prepare-runtime.js",
     "desktop:dev": "tauri dev",
     "desktop:build": "tauri build",

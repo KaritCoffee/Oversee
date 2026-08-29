@@ -2,13 +2,26 @@ const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
 const https = require("node:https");
+const net = require("node:net");
 const vm = require("node:vm");
 const { AisCollector } = require("./server-src/ais-collector.js");
 const { fetchLaunchLibrary } = require("./server-src/launch-library.js");
 const { fetchRadioStations } = require("./server-src/radio-browser.js");
 const { satnogsRecordToGp } = require("./server-src/satellite-fallback.js");
 const { parseCensusPopulationCsv } = require("./server-src/census-population.js");
-const { RemoteMediaPolicy } = require("./server-src/remote-media-policy.js");
+const { RemoteMediaPolicy, isPublicIpAddress } = require("./server-src/remote-media-policy.js");
+const { CameraHealthRegistry, buildCameraCoverage } = require("./server-src/camera-health.js");
+const { HistoryStore } = require("./server-src/history-store.js");
+const { buildUpdateStatus } = require("./server-src/versioning.js");
+const {
+  fetchAviationWeather,
+  fetchGdacsEvents,
+  fetchOpenAqAirQuality,
+  fetchOpenMeteoGrid,
+  fetchOpenMeteoWeather,
+  fetchSpaceWeather,
+  fetchTomTomIncidents,
+} = require("./server-src/situational-feeds.js");
 const {
   DailyTrafficBudget,
   buildOverpassRoadQuery,
@@ -19,7 +32,7 @@ const {
 } = require("./server-src/road-traffic.js");
 
 const ROOT = __dirname;
-const APP_VERSION = "3.1.0";
+const APP_VERSION = "3.2.0";
 const BUILT_FRONTEND_ROOT = path.join(ROOT, "dist");
 const STATIC_ROOT = process.env.OVERSEE_STATIC_ROOT
   ? path.resolve(process.env.OVERSEE_STATIC_ROOT)
@@ -710,6 +723,25 @@ const trafficRuntime = {
   lastRoadError: "",
 };
 const trafficBudget = loadTrafficBudget();
+const historyStore = new HistoryStore({
+  filePath: path.join(RUNTIME_CACHE_DIR, "signal-history-v1.json"),
+  maxSamples: 576,
+  minIntervalMs: 5 * 60 * 1000,
+});
+const cameraHealthRegistry = new CameraHealthRegistry({
+  filePath: path.join(RUNTIME_CACHE_DIR, "camera-health-v1.json"),
+  maxRecords: 8000,
+});
+const cameraHealthSweep = {
+  running: false,
+  lastStartedAt: "",
+  lastCompletedAt: "",
+  checked: 0,
+  healthy: 0,
+  failed: 0,
+  message: "Waiting for first scheduled camera check",
+};
+let latestSnapshot = null;
 let serverPort = REQUESTED_PORT;
 
 const server = http.createServer(async (request, response) => {
@@ -724,10 +756,99 @@ const server = http.createServer(async (request, response) => {
       return sendJson(response, 200, { ok: true, version: APP_VERSION, port: serverPort, generatedAt: new Date().toISOString() });
     }
 
+    if (requestUrl.pathname === "/api/history") {
+      const scope = requestUrl.searchParams.get("scope") || "";
+      const since = Number(requestUrl.searchParams.get("since") || 0);
+      const limit = clampInt(requestUrl.searchParams.get("limit"), 1, 576, 288);
+      return sendJson(response, 200, {
+        generatedAt: new Date().toISOString(),
+        samples: historyStore.query({ scope, since, limit }),
+        stats: historyStore.stats(),
+      });
+    }
+
+    if (requestUrl.pathname === "/api/location-context") {
+      const lat = Number(requestUrl.searchParams.get("lat"));
+      const lng = Number(requestUrl.searchParams.get("lng"));
+      const radiusKm = clamp(Number(requestUrl.searchParams.get("radiusKm") || 100), 10, 500);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -85 || lat > 85 || lng < -180 || lng > 180) {
+        return sendJson(response, 400, { error: "Valid latitude and longitude are required" });
+      }
+      return sendJson(response, 200, await buildLocationContext(lat, lng, radiusKm));
+    }
+
+    if (requestUrl.pathname === "/api/weather/grid") {
+      let bounds;
+      try {
+        bounds = normalizeWeatherBounds(requestUrl.searchParams.get("bbox"));
+      } catch (error) {
+        return sendJson(response, 400, { error: error.message });
+      }
+      const maxPoints = clampInt(requestUrl.searchParams.get("points"), 12, 64, 42);
+      const cacheKey = `weather-grid:${Object.values(bounds).map((value) => Number(value).toFixed(1)).join(":")}:${maxPoints}`;
+      const result = await getCached(cacheKey, 15 * 60 * 1000, () => fetchOpenMeteoGrid({ fetchJson, bounds, maxPoints }), { staleTtlMs: 6 * 60 * 60 * 1000 });
+      return sendJson(response, result.ok ? 200 : 503, {
+        ok: result.ok,
+        generatedAt: new Date().toISOString(),
+        updatedAt: result.updatedAt ? new Date(result.updatedAt).toISOString() : "",
+        cached: Boolean(result.cached),
+        stale: Boolean(result.stale),
+        bounds,
+        points: Array.isArray(result.data) ? result.data : [],
+        message: result.message || "",
+        source: "Open-Meteo",
+        attribution: "Weather data by Open-Meteo.com",
+      });
+    }
+
+    if (requestUrl.pathname === "/api/diagnostics") {
+      return sendJson(response, 200, buildDiagnostics());
+    }
+
+    if (requestUrl.pathname === "/api/update-status") {
+      const result = await getCached("github:latest-release", 30 * 60 * 1000, fetchGithubReleaseOrTag, { staleTtlMs: 24 * 60 * 60 * 1000 });
+      if (!result.ok) return sendJson(response, 200, { ok: false, currentVersion: APP_VERSION, updateAvailable: false, message: result.message || "Release information is unavailable" });
+      return sendJson(response, 200, { ...buildUpdateStatus(APP_VERSION, result.data), cached: Boolean(result.cached), stale: Boolean(result.stale) });
+    }
+
     if (requestUrl.pathname === "/api/cameras") {
       const scope = normalizeScope(requestUrl.searchParams.get("scope"));
       const cameraSet = await buildCameraSet(scope);
-      return sendJson(response, 200, { generatedAt: new Date().toISOString(), scope, cameras: cameraSet.data, sourceHealth: cameraSet.health });
+      return sendJson(response, 200, { generatedAt: new Date().toISOString(), scope, cameras: cameraSet.data, coverage: cameraSet.coverage, sourceHealth: cameraSet.health });
+    }
+
+    if (requestUrl.pathname === "/api/custom-cameras") {
+      if (request.method === "GET") return sendJson(response, 200, { cameras: customCameraRecords() });
+      if (request.method === "POST") {
+        if (!isSameOriginLocalRequest(request)) return sendJson(response, 403, { error: "Forbidden origin" });
+        if (!String(request.headers["content-type"] || "").toLowerCase().startsWith("application/json")) return sendJson(response, 415, { error: "Content-Type must be application/json" });
+        const payload = await readJsonBody(request);
+        try {
+          return sendJson(response, 200, updateCustomCameras(payload));
+        } catch (error) {
+          return sendJson(response, 400, { error: error.message });
+        }
+      }
+      return sendJson(response, 405, { error: "Method not allowed" });
+    }
+
+    if (requestUrl.pathname === "/api/camera-health") {
+      if (request.method !== "POST") return sendJson(response, 405, { error: "Method not allowed" });
+      if (!isSameOriginLocalRequest(request)) return sendJson(response, 403, { error: "Forbidden origin" });
+      const payload = await readJsonBody(request);
+      if (!payload.id || typeof payload.ok !== "boolean") return sendJson(response, 400, { error: "Camera id and boolean status are required" });
+      return sendJson(response, 200, cameraHealthRegistry.record(String(payload.id), {
+        ok: payload.ok,
+        mediaType: payload.mediaType,
+        message: payload.message,
+      }));
+    }
+
+    if (requestUrl.pathname === "/api/camera-health/recheck") {
+      if (request.method !== "POST") return sendJson(response, 405, { error: "Method not allowed" });
+      if (!isSameOriginLocalRequest(request)) return sendJson(response, 403, { error: "Forbidden origin" });
+      const result = await runCameraHealthSweep({ limit: clampInt(requestUrl.searchParams.get("limit"), 1, 24, 12) });
+      return sendJson(response, 200, result);
     }
 
     if (requestUrl.pathname === "/api/settings") {
@@ -777,6 +898,10 @@ const server = http.createServer(async (request, response) => {
       return handleTrafficRoadRequest(requestUrl, response);
     }
 
+    if (requestUrl.pathname === "/api/traffic/incidents") {
+      return handleTrafficIncidentRequest(requestUrl, response);
+    }
+
     const trafficTile = parseTrafficTilePath(requestUrl.pathname);
     if (trafficTile) {
       return proxyTrafficFlowTile(trafficTile, response);
@@ -813,17 +938,19 @@ const server = http.createServer(async (request, response) => {
 });
 
 listenOnPreferredPort(0);
+scheduleCameraHealthSweeps();
 
 async function buildIntelSnapshot(scope) {
   const bounds = SCOPE_BOUNDS[scope];
   configureAisCollector();
-  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, nhcResult, cubaReportResult, fireResult, egpIncidentResult, egpPerimeterResult, censusResult, launchResult, radioResult] = await Promise.all([
+  const [cameraSet, satelliteResult, flightResult, quakeResult, alertResult, nhcResult, gdacsResult, cubaReportResult, fireResult, egpIncidentResult, egpPerimeterResult, censusResult, launchResult, radioResult, spaceWeatherResult] = await Promise.all([
     buildCameraSet(scope),
     getCached("satellites", 10 * 60 * 1000, () => fetchSatellites(scope)),
     getCached(`flights:${scope}`, 10 * 60 * 1000, () => fetchFlights(scope)),
     getCached("quakes", 60 * 1000, () => fetchQuakes()),
     getCached(`alerts:${scope}`, 90 * 1000, () => fetchAlerts(scope)),
     getCached("nhc:current-storms", 10 * 60 * 1000, () => fetchNhcStormAlerts()),
+    getCached("gdacs:global-disasters", 5 * 60 * 1000, () => fetchGdacsEvents({ fetchJson }), { staleTtlMs: 14 * 24 * 60 * 60 * 1000 }),
     getCached("gdelt:cuba-reports", 15 * 60 * 1000, () => fetchCubaOpenReports()),
     getCached(`fires:${scope}`, 5 * 60 * 1000, () => fetchFires(scope)),
     getCached("egp:incidents", 5 * 60 * 1000, () => fetchEgpIncidents()),
@@ -834,6 +961,7 @@ async function buildIntelSnapshot(scope) {
       token: getConfiguredSecret("launchLibraryToken", ["LL2_API_TOKEN"]),
     }), { staleTtlMs: 7 * 24 * 60 * 60 * 1000 }),
     getCached("radio:global", 6 * 60 * 60 * 1000, () => fetchRadioStations({ fetchJson }), { staleTtlMs: 14 * 24 * 60 * 60 * 1000 }),
+    getCached("space-weather:summary", 5 * 60 * 1000, () => fetchSpaceWeather({ fetchJson }), { staleTtlMs: 3 * 24 * 60 * 60 * 1000 }),
   ]);
   const vesselResult = aisCollector.snapshot();
 
@@ -844,9 +972,10 @@ async function buildIntelSnapshot(scope) {
   const cubaReferenceSignals = buildCubaReferenceSignals();
   const nwsAlerts = filterGeoItems(alertResult.data || [], bounds);
   const nhcAlerts = filterGeoItems(nhcResult.data || [], bounds);
+  const gdacsAlerts = filterGeoItems(gdacsResult.data || [], bounds);
   const cubaReportAlerts = filterGeoItems(cubaReportResult.data || [], bounds);
   const referenceAlerts = filterGeoItems(cubaReferenceSignals, bounds);
-  const alerts = sortAlertsForDisplay([...nwsAlerts, ...nhcAlerts, ...cubaReportAlerts, ...referenceAlerts]).slice(0, 100);
+  const alerts = sortAlertsForDisplay([...nwsAlerts, ...nhcAlerts, ...gdacsAlerts, ...cubaReportAlerts, ...referenceAlerts]).slice(0, 140);
   const fires = filterGeoItems([...(fireResult.data || []), ...(egpIncidentResult.data || []), ...(egpPerimeterResult.data || [])], bounds).slice(0, bounds.fireLimit || 1800);
   const demographics = filterGeoItems(censusResult.data || [], bounds).slice(0, 80);
   const vessels = filterGeoItems(vesselResult.data || [], bounds).slice(0, bounds.vesselLimit || 3000);
@@ -863,6 +992,7 @@ async function buildIntelSnapshot(scope) {
     healthFromResult("USGS quakes", quakeResult, quakes.length),
     healthFromResult("NWS alerts", alertResult, nwsAlerts.length),
     healthFromResult("NHC active storms", nhcResult, nhcAlerts.length),
+    healthFromResult("GDACS global disasters", gdacsResult, gdacsAlerts.length),
     healthFromResult("Cuba open reporting", cubaReportResult, cubaReportAlerts.length, { optional: true }),
     { name: "Cuba reference monitors", ok: true, count: referenceAlerts.length, cached: false, stale: false, message: "" },
     healthFromResult("NASA FIRMS fires", fireResult, filterGeoItems(fireResult.data || [], bounds).length),
@@ -871,6 +1001,7 @@ async function buildIntelSnapshot(scope) {
     healthFromResult("Census population estimates", censusResult, demographics.length),
     healthFromResult("Launch Library 2", launchResult, launches.length, { optional: true, staleAfterMs: 60 * 60 * 1000 }),
     healthFromResult("Radio Browser", radioResult, radio.length, { optional: true, staleAfterMs: 24 * 60 * 60 * 1000 }),
+    healthFromResult("NOAA space weather", spaceWeatherResult, spaceWeatherResult.data?.alerts?.length || 0, { staleAfterMs: 30 * 60 * 1000 }),
     healthFromResult("AISStream vessels", vesselResult, vessels.length, {
       optional: true,
       configured: vesselResult.configured,
@@ -879,10 +1010,11 @@ async function buildIntelSnapshot(scope) {
   ];
   const videoFeeds = cameras.filter((camera) => camera.capability === "player" || camera.capability === "stream").length;
 
-  return {
+  const snapshot = {
     generatedAt: new Date().toISOString(),
     scope,
     cameraCatalogTotal: cameras.length,
+    cameraCoverage: cameraSet.coverage,
     cameras,
     satellites,
     flights,
@@ -893,6 +1025,7 @@ async function buildIntelSnapshot(scope) {
     vessels,
     launches,
     radio,
+    spaceWeather: spaceWeatherResult.ok ? spaceWeatherResult.data : null,
     traffic: [],
     events,
     regions,
@@ -910,6 +1043,7 @@ async function buildIntelSnapshot(scope) {
       vessels: vessels.length,
       launches: launches.length,
       radio: radio.length,
+      globalDisasters: gdacsAlerts.length,
     },
     refreshPolicy: {
       snapshotSeconds: 60,
@@ -919,6 +1053,146 @@ async function buildIntelSnapshot(scope) {
       launchesSeconds: 900,
       radioSeconds: 21600,
       vesselsSeconds: 15,
+      gdacsSeconds: 300,
+      spaceWeatherSeconds: 300,
+    },
+  };
+  latestSnapshot = snapshot;
+  historyStore.append(snapshot);
+  return snapshot;
+}
+
+async function buildLocationContext(lat, lng, radiusKm) {
+  const bounds = boundsAroundPoint(lat, lng, Math.min(radiusKm, 250));
+  const incidentBounds = boundsAroundPoint(lat, lng, Math.min(radiusKm, 45));
+  const weatherKey = `${Math.round(lat * 4) / 4}:${Math.round(lng * 4) / 4}`;
+  const aviationKey = Object.values(bounds).map((value) => Number(value).toFixed(2)).join(":");
+  const incidentKey = Object.values(incidentBounds).map((value) => Number(value).toFixed(2)).join(":");
+  const openAqApiKey = getConfiguredSecret("openAqApiKey", ["OPENAQ_API_KEY"]);
+  const airQualityKey = `${Math.round(lat * 20) / 20}:${Math.round(lng * 20) / 20}:${Math.min(radiusKm, 25)}`;
+  const airQualityPromise = openAqApiKey
+    ? getCached(`openaq:${airQualityKey}`, 10 * 60 * 1000, () => fetchOpenAqAirQuality({
+      fetchJson,
+      apiKey: openAqApiKey,
+      lat,
+      lng,
+      radiusKm: Math.min(radiusKm, 25),
+    }), { staleTtlMs: 6 * 60 * 60 * 1000 })
+    : Promise.resolve({
+      ok: true,
+      data: { configured: false, stations: [], note: "Add an OpenAQ API key in Settings for nearby air-quality monitors." },
+      cached: false,
+      stale: false,
+      updatedAt: Date.now(),
+    });
+  const [weatherResult, aviationResult, incidentResult, airQualityResult] = await Promise.all([
+    getCached(`weather:${weatherKey}`, 10 * 60 * 1000, () => fetchOpenMeteoWeather({ fetchJson, lat, lng }), { staleTtlMs: 24 * 60 * 60 * 1000 }),
+    getCached(`aviation-weather:${aviationKey}`, 5 * 60 * 1000, () => fetchAviationWeather({ fetchJson, bounds }), { staleTtlMs: 6 * 60 * 60 * 1000 }),
+    getCached(`traffic-incidents:${incidentKey}`, 60 * 1000, () => fetchConfiguredTrafficIncidents(incidentBounds), { staleTtlMs: 30 * 60 * 1000 }),
+    airQualityPromise,
+  ]);
+  const aviation = aviationResult.ok ? aviationResult.data : { stations: [], advisories: [], partial: true };
+  if (Array.isArray(aviation.stations)) {
+    aviation.stations = aviation.stations
+      .map((station) => ({ ...station, distanceKm: Math.round(distanceBetweenLatLng(lat, lng, station.lat, station.lng) * 10) / 10 }))
+      .sort((left, right) => left.distanceKm - right.distanceKm)
+      .slice(0, 40);
+  }
+  return {
+    generatedAt: new Date().toISOString(),
+    center: { lat, lng },
+    radiusKm,
+    weather: weatherResult.ok ? weatherResult.data : null,
+    aviation,
+    traffic: incidentResult.ok ? incidentResult.data : { configured: Boolean(getConfiguredSecret("tomTomTrafficApiKey", ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"])), incidents: [] },
+    airQuality: airQualityResult.ok ? airQualityResult.data : { configured: Boolean(openAqApiKey), stations: [], error: airQualityResult.message || "OpenAQ did not respond" },
+    sourceHealth: [
+      healthFromResult("Open-Meteo local forecast", weatherResult, weatherResult.ok ? 1 : 0),
+      healthFromResult("Aviation Weather Center", aviationResult, (aviation.stations?.length || 0) + (aviation.advisories?.length || 0)),
+      healthFromResult("TomTom traffic incidents", incidentResult, incidentResult.data?.incidents?.length || 0, {
+        optional: true,
+        configured: Boolean(getConfiguredSecret("tomTomTrafficApiKey", ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"])),
+      }),
+      healthFromResult("OpenAQ local monitors", airQualityResult, airQualityResult.data?.stations?.length || 0, {
+        optional: true,
+        configured: Boolean(openAqApiKey),
+      }),
+    ],
+  };
+}
+
+function boundsAroundPoint(lat, lng, radiusKm) {
+  const latSpan = radiusKm / 111.2;
+  const lngSpan = radiusKm / Math.max(19.4, 111.2 * Math.cos(lat * Math.PI / 180));
+  return {
+    west: Math.max(-180, Number((lng - lngSpan).toFixed(5))),
+    south: Math.max(-85, Number((lat - latSpan).toFixed(5))),
+    east: Math.min(180, Number((lng + lngSpan).toFixed(5))),
+    north: Math.min(85, Number((lat + latSpan).toFixed(5))),
+  };
+}
+
+function normalizeWeatherBounds(value) {
+  const numbers = String(value || "-180,-75,180,75").split(",").map(Number);
+  if (numbers.length !== 4 || numbers.some((number) => !Number.isFinite(number))) throw new Error("Weather bounds must contain west,south,east,north coordinates");
+  const [west, south, east, north] = numbers;
+  if (west < -180 || west > 180 || east < -180 || east > 180 || south < -85 || north > 85 || north <= south || west === east) throw new Error("Weather bounds are outside the supported map area");
+  return { west, south, east, north };
+}
+
+async function fetchConfiguredTrafficIncidents(bounds) {
+  const apiKey = getConfiguredSecret("tomTomTrafficApiKey", ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"]);
+  if (!apiKey) return { configured: false, incidents: [], note: "Add a TomTom key in Settings for live incidents and closures." };
+  if (!trafficBudget.consume(1)) throw new Error("Local TomTom daily request ceiling reached");
+  saveTrafficBudget();
+  return fetchTomTomIncidents({ fetchJson, apiKey, bounds });
+}
+
+async function fetchGithubReleaseOrTag() {
+  try {
+    return await fetchJson("https://api.github.com/repos/KaritCoffee/Oversee/releases/latest", { timeoutMs: 8000 });
+  } catch {
+    const tags = await fetchJson("https://api.github.com/repos/KaritCoffee/Oversee/tags?per_page=1", { timeoutMs: 8000 });
+    const latest = Array.isArray(tags) ? tags[0] : null;
+    if (!latest?.name) throw new Error("No published Oversee release or version tag was found");
+    return {
+      tag_name: latest.name,
+      name: latest.name,
+      html_url: `https://github.com/KaritCoffee/Oversee/releases/tag/${encodeURIComponent(latest.name)}`,
+      published_at: "",
+      prerelease: false,
+    };
+  }
+}
+
+function buildDiagnostics() {
+  const sourceHealth = latestSnapshot?.sourceHealth || [];
+  const responding = sourceHealth.filter((source) => source.ok).length;
+  return {
+    generatedAt: new Date().toISOString(),
+    application: {
+      name: "Oversee",
+      version: APP_VERSION,
+      platform: process.platform,
+      architecture: process.arch,
+      node: process.version,
+      uptimeSeconds: Math.round(process.uptime()),
+      port: serverPort,
+    },
+    snapshot: latestSnapshot ? {
+      generatedAt: latestSnapshot.generatedAt,
+      scope: latestSnapshot.scope,
+      metrics: latestSnapshot.metrics,
+      sources: { responding, total: sourceHealth.length, stale: sourceHealth.filter((source) => source.stale).length },
+    } : null,
+    sourceHealth,
+    history: historyStore.stats(),
+    cameraHealth: { ...cameraHealthSweep, registry: cameraHealthRegistry.summary(latestSnapshot?.cameras || []) },
+    traffic: buildTrafficStatus(),
+    settings: publicSettings().settings.map(({ key, label, configured, local, bundled, env }) => ({ key, label, configured, local, bundled, env })),
+    paths: {
+      userConfig: USER_CONFIG_PATH,
+      runtimeCache: RUNTIME_CACHE_DIR,
     },
   };
 }
@@ -939,11 +1213,91 @@ async function buildCameraSet(scope = "world") {
   const cameras = [...localCameras, ...externalCameras]
     .filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng))
     .filter((camera) => !bounds || bounds === SCOPE_BOUNDS.world || inBounds(camera, bounds))
-    .sort(compareCameras);
+    .sort(compareCameras)
+    .map((camera) => cameraHealthRegistry.decorate(camera));
 
   rememberDynamicCameras(cameras);
   rememberProxyImageHosts(cameras);
-  return { data: cameras, health: sourceHealth };
+  return {
+    data: cameras,
+    health: sourceHealth,
+    coverage: { ...buildCameraCoverage(cameras), health: cameraHealthRegistry.summary(cameras) },
+  };
+}
+
+function scheduleCameraHealthSweeps() {
+  const initial = setTimeout(() => runCameraHealthSweep().catch(() => {}), 90 * 1000);
+  const recurring = setInterval(() => runCameraHealthSweep().catch(() => {}), 20 * 60 * 1000);
+  initial.unref?.();
+  recurring.unref?.();
+}
+
+async function runCameraHealthSweep(options = {}) {
+  if (cameraHealthSweep.running) return { ...cameraHealthSweep, skipped: true };
+  cameraHealthSweep.running = true;
+  cameraHealthSweep.lastStartedAt = new Date().toISOString();
+  cameraHealthSweep.message = "Checking a bounded sample of public camera media";
+  try {
+    const cameraSet = await buildCameraSet("world");
+    const limit = clampInt(options.limit, 1, 24, 8);
+    const candidates = selectCameraHealthCandidates(cameraSet.data, limit);
+    const observations = await mapLimit(candidates, 4, async (camera) => {
+      try {
+        const view = await resolveFeedView(camera.id);
+        const ok = isHealthyCameraView(view);
+        cameraHealthRegistry.record(camera.id, {
+          ok,
+          mediaType: view?.type || camera.viewerType,
+          message: ok ? "" : view?.offlineReason || view?.note || "Public media did not validate",
+        });
+        return { id: camera.id, ok };
+      } catch (error) {
+        cameraHealthRegistry.record(camera.id, { ok: false, mediaType: camera.viewerType, message: error.message });
+        return { id: camera.id, ok: false };
+      }
+    });
+    cameraHealthSweep.checked = observations.length;
+    cameraHealthSweep.healthy = observations.filter((item) => item.ok).length;
+    cameraHealthSweep.failed = observations.filter((item) => !item.ok).length;
+    cameraHealthSweep.lastCompletedAt = new Date().toISOString();
+    cameraHealthSweep.message = observations.length
+      ? `Checked ${observations.length} camera feeds without interrupting the map`
+      : "No camera feeds were due for recheck";
+    return { ...cameraHealthSweep, running: false, health: cameraHealthRegistry.summary(cameraSet.data) };
+  } catch (error) {
+    cameraHealthSweep.lastCompletedAt = new Date().toISOString();
+    cameraHealthSweep.message = error.message;
+    return { ...cameraHealthSweep, running: false, error: error.message };
+  } finally {
+    cameraHealthSweep.running = false;
+  }
+}
+
+function selectCameraHealthCandidates(cameras, limit) {
+  const now = Date.now();
+  const eligible = cameras
+    .filter((camera) => !camera.personal && (camera.capability === "stream" || camera.capability === "player" || camera.capability === "candidate" || camera.viewerType === "hls" || camera.viewerType === "video"))
+    .map((camera) => ({ camera, health: cameraHealthRegistry.status(camera.id) }))
+    .filter(({ health }) => {
+      const age = now - Date.parse(health.lastCheckedAt || 0);
+      if (health.status === "down") return age >= 6 * 60 * 60 * 1000;
+      if (health.status === "verified") return age >= 24 * 60 * 60 * 1000;
+      return true;
+    });
+  const byOldest = (left, right) => Date.parse(left.health.lastCheckedAt || 0) - Date.parse(right.health.lastCheckedAt || 0);
+  const down = eligible.filter((entry) => entry.health.status === "down").sort(byOldest).slice(0, Math.min(3, limit));
+  const unverified = eligible.filter((entry) => entry.health.status === "unverified").sort(byOldest).slice(0, Math.max(0, limit - down.length));
+  const selected = [...down, ...unverified];
+  if (selected.length < limit) {
+    selected.push(...eligible.filter((entry) => entry.health.status === "verified").sort(byOldest).slice(0, limit - selected.length));
+  }
+  return selected.map((entry) => entry.camera);
+}
+
+function isHealthyCameraView(view) {
+  if (!view || view.type === "unavailable" || view.streamStatus === "down" || view.offlineReason || !view.url) return false;
+  if (view.type === "hls" || view.type === "video" || view.type === "image") return true;
+  return view.type === "iframe" && view.capability === "player";
 }
 
 async function buildLocalCameras() {
@@ -980,7 +1334,7 @@ async function buildLocalCameras() {
       };
     })
   );
-  return [...cameras, ...CURATED_PUBLIC_CAMERAS.map(mapCuratedCamera)]
+  return [...cameras, ...CURATED_PUBLIC_CAMERAS.map(mapCuratedCamera), ...customCameraRecords()]
     .filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng));
 }
 
@@ -2757,7 +3111,7 @@ async function verifyKnownEmbedPlayer(view) {
   const result = await getCached(`embed:${view.url}`, 2 * 60 * 1000, async () => {
     const response = await fetch(view.url, {
       headers: {
-        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
         Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
       },
       signal: AbortSignal.timeout(8000),
@@ -2973,7 +3327,7 @@ async function verifyHlsPlaylist(url) {
   const result = await getCached(`hls:${url}`, 5 * 60 * 1000, async () => {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
         Accept: "application/vnd.apple.mpegurl, application/x-mpegURL, text/plain;q=0.9, */*;q=0.8",
       },
       signal: AbortSignal.timeout(7000),
@@ -2991,7 +3345,7 @@ async function verifyVideoAsset(url) {
   const result = await getCached(`video:${url}`, 5 * 60 * 1000, async () => {
     const response = await fetch(url, {
       headers: {
-        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
         Accept: "video/*,*/*;q=0.8",
         Range: "bytes=0-1",
       },
@@ -4197,7 +4551,7 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+      "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
       Accept: "application/geo+json, application/json, text/plain;q=0.9, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -4213,7 +4567,7 @@ async function fetchText(url, options = {}) {
   const response = await fetch(url, {
     method: options.method || "GET",
     headers: {
-      "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+      "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
       Accept: options.accept || "text/plain, */*;q=0.8",
       ...(options.headers || {}),
     },
@@ -4316,6 +4670,35 @@ async function handleTrafficRoadRequest(requestUrl, response) {
   });
 }
 
+async function handleTrafficIncidentRequest(requestUrl, response) {
+  let bounds;
+  try {
+    bounds = normalizeTrafficBbox(requestUrl.searchParams.get("bbox"), {
+      maxLngSpan: 1.2,
+      maxLatSpan: 1.2,
+      maxArea: 0.85,
+    });
+  } catch (error) {
+    return sendJson(response, 400, { error: error.message });
+  }
+
+  const key = `traffic-incidents:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}`;
+  const result = await getCached(key, 60 * 1000, () => fetchConfiguredTrafficIncidents(bounds), { staleTtlMs: 30 * 60 * 1000 });
+  const payload = result.ok && result.data && !Array.isArray(result.data)
+    ? result.data
+    : { configured: Boolean(getConfiguredSecret("tomTomTrafficApiKey", ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"])), incidents: [] };
+  return sendJson(response, result.ok ? 200 : 503, {
+    ok: result.ok,
+    generatedAt: new Date().toISOString(),
+    updatedAt: result.updatedAt ? new Date(result.updatedAt).toISOString() : "",
+    cached: Boolean(result.cached),
+    stale: Boolean(result.stale),
+    bounds,
+    message: result.message || payload.note || "",
+    ...payload,
+  });
+}
+
 async function fetchOverpassRoads(bounds, detail) {
   const query = buildOverpassRoadQuery(bounds, { detail });
   const body = new URLSearchParams({ data: query }).toString();
@@ -4367,7 +4750,7 @@ async function proxyTrafficFlowTile(tile, response) {
   try {
     const upstream = await fetch(upstreamUrl, {
       headers: {
-        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
         Accept: "image/png, application/json;q=0.8",
       },
       signal: AbortSignal.timeout(9000),
@@ -4457,7 +4840,7 @@ function fetchLegacyResource(url, options = {}) {
     const request = https.request(url, {
       method: options.method || "GET",
       headers: {
-        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
         Accept: "application/json, text/plain;q=0.9, */*;q=0.8",
         ...(body ? { "Content-Length": body.length } : {}),
         ...(options.headers || {}),
@@ -4513,7 +4896,7 @@ async function proxyGibsTexture(requestUrl, response) {
   const result = await getCached(cacheKey, 6 * 60 * 60 * 1000, async () => {
     const upstream = await fetch(gibsUrl, {
       headers: {
-        "User-Agent": "Oversee/3.1 (+local public intelligence dashboard)",
+        "User-Agent": "Oversee/3.2 (+local public intelligence dashboard)",
         Accept: `${view.format}, image/*;q=0.9, */*;q=0.5`,
       },
       signal: AbortSignal.timeout(14000),
@@ -4696,10 +5079,15 @@ const USER_SETTING_FIELDS = [
     env: ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"],
     description: "Optional. Enables observed congestion colors; without it, Oversee clearly labels an OpenStreetMap time-of-day model.",
   },
-  { key: "googleMapsApiKey", label: "Google Maps / 3D Tiles key", env: ["GOOGLE_MAPS_API_KEY", "GOOGLE_EARTH_API_KEY"] },
-  { key: "flightradar24ApiKey", label: "Flightradar24 API key", env: ["FLIGHTRADAR24_API_KEY", "FR24_API_KEY"] },
-  { key: "cesiumIonToken", label: "Cesium ion token", env: ["CESIUM_ION_TOKEN"] },
-  { key: "openAqApiKey", label: "OpenAQ API key", env: ["OPENAQ_API_KEY"] },
+  { key: "googleMapsApiKey", label: "Google Maps / 3D Tiles key", env: ["GOOGLE_MAPS_API_KEY", "GOOGLE_EARTH_API_KEY"], visible: false },
+  { key: "flightradar24ApiKey", label: "Flightradar24 API key", env: ["FLIGHTRADAR24_API_KEY", "FR24_API_KEY"], visible: false },
+  { key: "cesiumIonToken", label: "Cesium ion token", env: ["CESIUM_ION_TOKEN"], visible: false },
+  {
+    key: "openAqApiKey",
+    label: "OpenAQ API key",
+    env: ["OPENAQ_API_KEY"],
+    description: "Optional. Adds nearby public air-quality monitor readings to Area Briefs; no key value is sent to the browser.",
+  },
   { key: "censusApiKey", label: "Census API key", env: ["CENSUS_API_KEY"] },
   { key: "wisconsin511ApiKey", label: "Wisconsin 511 API key", env: ["WISCONSIN_511_API_KEY", "WI511_API_KEY"] },
   { key: "louisiana511ApiKey", label: "Louisiana 511 API key", env: ["LOUISIANA_511_API_KEY", "LA511_API_KEY"] },
@@ -4710,10 +5098,95 @@ const USER_SETTING_FIELDS = [
   { key: "launchLibraryToken", label: "Launch Library 2 token", env: ["LL2_API_TOKEN"] },
 ];
 
+function customCameraRecords() {
+  const records = Array.isArray(USER_CONFIG.customCameras)
+    ? USER_CONFIG.customCameras
+    : Array.isArray(LOCAL_CONFIG.customCameras)
+      ? LOCAL_CONFIG.customCameras
+      : [];
+  return records.map(normalizeCustomCamera).filter(Boolean);
+}
+
+function updateCustomCameras(payload = {}) {
+  const current = customCameraRecords();
+  if (payload.removeId) {
+    USER_CONFIG.customCameras = current.filter((camera) => camera.id !== String(payload.removeId));
+  } else if (payload.camera) {
+    const camera = normalizeCustomCamera(payload.camera, { createId: true });
+    if (!camera) throw new Error("A name, public media/source URL, and valid coordinates are required");
+    const index = current.findIndex((entry) => entry.id === camera.id);
+    if (index >= 0) current[index] = camera;
+    else current.unshift(camera);
+    USER_CONFIG.customCameras = current.slice(0, 250);
+  }
+  LOCAL_CONFIG.customCameras = USER_CONFIG.customCameras || [];
+  USER_CONFIG.updatedAt = new Date().toISOString();
+  saveLocalConfig();
+  cache.clear();
+  return { cameras: customCameraRecords(), updatedAt: USER_CONFIG.updatedAt };
+}
+
+function normalizeCustomCamera(value, options = {}) {
+  const name = cleanCameraText(value?.name).slice(0, 140);
+  const lat = Number(value?.lat);
+  const lng = Number(value?.lng);
+  const viewerType = ["image", "hls", "video", "iframe", "page"].includes(value?.viewerType) ? value.viewerType : "image";
+  const mediaUrl = safePublicCameraUrl(value?.mediaUrl || value?.imageUrl || value?.streamUrl || value?.sourcePageUrl || value?.officialUrl);
+  const sourcePageUrl = safePublicCameraUrl(value?.sourcePageUrl || value?.officialUrl || mediaUrl);
+  if (!name || !validLat(lat) || !validLng(lng) || !mediaUrl) return null;
+  const id = String(value?.id || (options.createId ? `custom-${slugify(name)}-${Math.abs(hashString(`${name}:${lat}:${lng}:${mediaUrl}`)).toString(36)}` : ""));
+  if (!id) return null;
+  const directType = viewerType === "hls" || viewerType === "video";
+  const imageType = viewerType === "image";
+  const capability = directType ? "stream" : imageType ? "snapshot" : viewerType === "iframe" ? "player" : "source";
+  return {
+    id,
+    type: "camera",
+    dynamic: true,
+    personal: true,
+    name,
+    shortName: shortCameraName(name),
+    area: cleanCameraText(value?.area || value?.region || "Personal camera").slice(0, 100),
+    region: cleanCameraText(value?.region || value?.country || "Personal").slice(0, 100),
+    country: cleanCameraText(value?.country || "Personal").slice(0, 80),
+    category: cleanCameraText(value?.category || "camera").slice(0, 40),
+    tags: ["personal", "user-added", value?.country, value?.region].filter(Boolean),
+    sourceId: "personal-camera-catalog",
+    sourceName: cleanCameraText(value?.sourceName || "Personal Camera Catalog").slice(0, 100),
+    sourceUrl: sourcePageUrl,
+    officialUrl: sourcePageUrl,
+    sourcePageUrl,
+    lat,
+    lng,
+    viewerType,
+    capability,
+    capabilityLabel: capabilityLabel(capability),
+    imageUrl: imageType ? mediaUrl : safePublicCameraUrl(value?.imageUrl || ""),
+    previewUrl: imageType ? mediaUrl : safePublicCameraUrl(value?.imageUrl || ""),
+    streamUrl: directType ? mediaUrl : "",
+    refreshSeconds: clampInt(value?.refreshSeconds, 20, 3600, 60),
+  };
+}
+
+function safePublicCameraUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value));
+    if (!/^https?:$/.test(url.protocol) || url.username || url.password) return "";
+    if (url.port && url.port !== "80" && url.port !== "443") return "";
+    const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local")) return "";
+    if (net.isIP(hostname) && !isPublicIpAddress(hostname)) return "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function publicSettings() {
   return {
     updatedAt: USER_CONFIG.updatedAt || "",
-    settings: USER_SETTING_FIELDS.map((field) => ({
+    settings: USER_SETTING_FIELDS.filter((field) => field.visible !== false).map((field) => ({
       key: field.key,
       label: field.label,
       configured: Boolean(getConfiguredSecret(field.key, field.env)),
@@ -4764,6 +5237,7 @@ function saveLocalConfig() {
   for (const field of USER_SETTING_FIELDS) {
     if (USER_CONFIG[field.key]) serializable[field.key] = USER_CONFIG[field.key];
   }
+  if (Array.isArray(USER_CONFIG.customCameras) && USER_CONFIG.customCameras.length) serializable.customCameras = USER_CONFIG.customCameras;
   if (USER_CONFIG.updatedAt) serializable.updatedAt = USER_CONFIG.updatedAt;
   fs.mkdirSync(path.dirname(USER_CONFIG_PATH), { recursive: true });
   fs.writeFileSync(USER_CONFIG_PATH, `${JSON.stringify(serializable, null, 2)}\n`);

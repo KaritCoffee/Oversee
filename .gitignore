@@ -9,3 +9,7 @@ src-tauri/resources/node.exe
 src-tauri/resources/node
 config.local.json
 src-tauri/resources/config.local.json
+.qa-cache/
+.edge-qa/
+.chrome-qa/
+qa-*.png

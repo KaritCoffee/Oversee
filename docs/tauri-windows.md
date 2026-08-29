@@ -45,3 +45,7 @@ src-tauri\target\release\bundle
 The Windows build copies the local `node.exe` into Tauri resources before packaging, so the installer can run the existing public-feed server without requiring Node.js on the recipient's machine.
 
 Longer term, the local API server could be converted into Rust commands to reduce installer size, but bundling Node keeps the current data adapters intact with much lower risk.
+
+The NSIS language file labels an existing installation as an update/repair rather than requiring a manual uninstall. Version metadata is checked by `npm run check:version` before release builds so an older package number cannot accidentally replace a newer build.
+
+See [release-signing.md](./release-signing.md) before distributing installers. Test builds are unsigned unless signing credentials are explicitly configured.

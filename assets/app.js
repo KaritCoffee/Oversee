@@ -6,6 +6,7 @@ import { MotionStore } from "../src/core/motion.js";
 import { SatellitePropagator } from "../src/core/satellite-motion.js";
 import { summarizeSourceHealth } from "../src/core/source-health.js";
 import { trafficModelForRoad } from "../src/core/traffic-model.js";
+import { collectNearbySignals, evaluateWatchZone, historyFrameItems } from "../src/core/location-brief.js";
 import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
 import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
 
@@ -151,14 +152,34 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       detail: "Active NHC tropical systems are pulled into the Alerts layer so Caribbean storms can appear near Cuba when active.",
     },
     {
+      name: "GDACS Global Disasters",
+      status: "Free global event feed",
+      detail: "Earthquakes, floods, cyclones, volcanoes, droughts, and wildfire events from the Global Disaster Alert and Coordination System join the Alerts layer with source-specific labels.",
+    },
+    {
+      name: "Open-Meteo",
+      status: "Free global forecast model",
+      detail: "Global current conditions, wind, temperature, and location forecasts power the Weather overlay and Area Brief without requiring a key.",
+    },
+    {
+      name: "Aviation Weather Center",
+      status: "Free official aviation weather",
+      detail: "Nearby METAR observations and active air-safety advisories appear inside Area Briefs so they add context without crowding the globe.",
+    },
+    {
+      name: "NOAA Space Weather",
+      status: "Free official space-weather feeds",
+      detail: "Current NOAA alerts and planetary K-index observations are included in Area Brief context and source diagnostics.",
+    },
+    {
       name: "GDELT Cuba Reporting",
       status: "Best effort public reporting",
       detail: "Recent public reporting mentioning Cuba/Havana is geolocated near Cuba as context signals; treat these as media indicators, not official confirmation.",
     },
     {
       name: "OpenAQ",
-      status: "Free with API key",
-      detail: "Good candidate for a future air-quality layer. The API is free, but current v3 access requires an API key so it should stay optional.",
+      status: "Optional local air-quality context",
+      detail: "A user-supplied OpenAQ v3 key adds nearby public monitor measurements to Area Briefs. Oversee reports source values and units without inventing an AQI conversion.",
     },
     {
       name: "OpenStreetMap / Leaflet",
@@ -211,6 +232,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     collapsedPanels: loadCollapsedPanels(),
     cameraMap: null,
     cameraLayer: null,
+    briefMapLayer: null,
     radarLayer: null,
     radarOverlay: false,
     floodLayer: null,
@@ -220,12 +242,25 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     trafficStatusFetchedAt: 0,
     trafficMapTileLayer: null,
     trafficMapRoadLayer: null,
+    trafficMapIncidentLayer: null,
     trafficMapRenderer: null,
     trafficMapRefreshTimer: null,
     trafficMapRequestToken: 0,
+    mapTrafficIncidents: [],
     globeWeatherOverlay: false,
+    weatherPaletteOpen: false,
+    globalWeatherOverlay: false,
+    globalWeatherPoints: [],
+    globalWeatherRequestToken: 0,
+    globalWeatherRefreshTimer: null,
+    mapGlobalWeatherOverlay: false,
+    mapWeatherPoints: [],
+    mapWeatherLayer: null,
+    mapWeatherRequestToken: 0,
+    mapWeatherRefreshTimer: null,
     globeFloodOverlay: false,
     globeTrafficOverlay: false,
+    globeTrafficIncidents: [],
     idleSpin: false,
     demoMode: false,
     demoTimer: null,
@@ -239,12 +274,26 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     demoPreviousIdleSpin: false,
     seenAlertIds: null,
     settings: null,
+    customCameras: [],
+    latestRelease: null,
     audioContext: null,
     cameraRenderer: null,
     hls: null,
     stillRefreshTimer: null,
     trackHistory: new Map(),
     pinnedAssets: loadPinnedAssets(),
+    briefOpen: false,
+    briefPickMode: false,
+    briefTab: "overview",
+    briefTarget: null,
+    briefRadiusKm: 100,
+    briefContext: null,
+    briefRequestToken: 0,
+    watchZones: loadWatchZones(),
+    watchZoneUnread: 0,
+    historySamples: [],
+    historyLoaded: false,
+    playbackSample: null,
   };
 
   const globe = {
@@ -260,6 +309,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     atmosphere: null,
     groups: {},
     selectionGroup: null,
+    briefGroup: null,
+    historyGroup: null,
+    weatherGroup: null,
     pickables: [],
     textures: new Map(),
     earthViewToken: 0,
@@ -278,6 +330,10 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     sources: {},
     pointLayers: {},
     selectionSource: null,
+    briefSource: null,
+    historySource: null,
+    incidentSource: null,
+    weatherGridSource: null,
     renderRetry: null,
     motionTimer: null,
     lastSelectionUpdate: 0,
@@ -314,9 +370,22 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     sourceDrawer: document.getElementById("sourceDrawer"),
     settingsDrawer: document.getElementById("settingsDrawer"),
     sourceGrid: document.getElementById("sourceGrid"),
+    sourceHealthSummary: document.getElementById("sourceHealthSummary"),
     settingsForm: document.getElementById("settingsForm"),
     settingsGrid: document.getElementById("settingsGrid"),
     settingsStatus: document.getElementById("settingsStatus"),
+    customCameraName: document.getElementById("customCameraName"),
+    customCameraArea: document.getElementById("customCameraArea"),
+    customCameraCountry: document.getElementById("customCameraCountry"),
+    customCameraLat: document.getElementById("customCameraLat"),
+    customCameraLng: document.getElementById("customCameraLng"),
+    customCameraType: document.getElementById("customCameraType"),
+    customCameraMediaUrl: document.getElementById("customCameraMediaUrl"),
+    customCameraSourceUrl: document.getElementById("customCameraSourceUrl"),
+    addCustomCamera: document.getElementById("addCustomCamera"),
+    recheckCameras: document.getElementById("recheckCameras"),
+    checkForUpdates: document.getElementById("checkForUpdates"),
+    customCameraList: document.getElementById("customCameraList"),
     scopeControls: document.getElementById("scopeControls"),
     globeRendererControls: document.getElementById("globeRendererControls"),
     earthViewControls: document.getElementById("earthViewControls"),
@@ -327,8 +396,30 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     alertDrawerList: document.getElementById("alertDrawerList"),
     openAlertDrawer: document.getElementById("openAlertDrawer"),
     closeAlertDrawer: document.getElementById("closeAlertDrawer"),
+    openBriefDrawer: document.getElementById("openBriefDrawer"),
+    closeBriefDrawer: document.getElementById("closeBriefDrawer"),
+    briefDrawer: document.getElementById("briefDrawer"),
+    briefTitle: document.getElementById("briefTitle"),
+    briefSubtitle: document.getElementById("briefSubtitle"),
+    briefRadiusControls: document.getElementById("briefRadiusControls"),
+    pickBriefLocation: document.getElementById("pickBriefLocation"),
+    pickBriefOnMap: document.getElementById("pickBriefOnMap"),
+    saveWatchZone: document.getElementById("saveWatchZone"),
+    briefTabs: document.getElementById("briefTabs"),
+    briefOverview: document.getElementById("briefOverview"),
+    briefWatches: document.getElementById("briefWatches"),
+    briefHistory: document.getElementById("briefHistory"),
+    watchZoneBadge: document.getElementById("watchZoneBadge"),
+    historyRange: document.getElementById("historyRange"),
+    historyTime: document.getElementById("historyTime"),
+    historyLive: document.getElementById("historyLive"),
+    historySummary: document.getElementById("historySummary"),
     alertDrawerCount: document.getElementById("alertDrawerCount"),
     toggleGlobeWeather: document.getElementById("toggleGlobeWeather"),
+    weatherPalette: document.getElementById("weatherPalette"),
+    toggleGlobalWeather: document.getElementById("toggleGlobalWeather"),
+    toggleWeatherRadar: document.getElementById("toggleWeatherRadar"),
+    weatherGridStatus: document.getElementById("weatherGridStatus"),
     toggleGlobeFlood: document.getElementById("toggleGlobeFlood"),
     toggleGlobeTraffic: document.getElementById("toggleGlobeTraffic"),
     globeTrafficStatus: document.getElementById("globeTrafficStatus"),
@@ -359,6 +450,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     watchDetail: document.getElementById("watchDetail"),
     cameraMap: document.getElementById("cameraMap"),
     toggleRadarOverlay: document.getElementById("toggleRadarOverlay"),
+    toggleGlobalWeatherMap: document.getElementById("toggleGlobalWeatherMap"),
     toggleFloodOverlay: document.getElementById("toggleFloodOverlay"),
     toggleTrafficOverlay: document.getElementById("toggleTrafficOverlay"),
     cameraTrafficStatus: document.getElementById("cameraTrafficStatus"),
@@ -381,6 +473,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     globeCanvas: document.getElementById("globeCanvas"),
     cesiumGlobe: document.getElementById("cesiumGlobe"),
     theaterSubtitle: document.getElementById("theaterSubtitle"),
+    downloadDiagnostics: document.getElementById("downloadDiagnostics"),
+    openOnboarding: document.getElementById("openOnboarding"),
+    onboardingModal: document.getElementById("onboardingModal"),
   };
 
   init();
@@ -399,6 +494,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     refreshSnapshot({ keepSelection: false });
     setInterval(initClock, 1000);
     setInterval(() => refreshSnapshot({ keepSelection: true, quiet: true }), 60000);
+    if (!localStorage.getItem("oversee:onboarding-v3")) {
+      window.setTimeout(() => toggleOnboarding(true), 1200);
+    }
     if (globalThis.lucide) globalThis.lucide.createIcons();
   }
 
@@ -433,9 +531,35 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     els.closeSourcePanel.addEventListener("click", () => toggleSourceDrawer(false));
     els.closeSettingsPanel.addEventListener("click", () => toggleSettingsDrawer(false));
     els.settingsForm.addEventListener("submit", saveSettings);
+    els.addCustomCamera.addEventListener("click", addCustomCamera);
+    els.recheckCameras.addEventListener("click", recheckCameras);
+    els.checkForUpdates.addEventListener("click", checkForUpdates);
     els.openAlertDrawer.addEventListener("click", () => toggleAlertDrawer());
     els.closeAlertDrawer.addEventListener("click", () => toggleAlertDrawer(false));
-    els.toggleGlobeWeather.addEventListener("click", toggleGlobeWeatherOverlay);
+    els.openBriefDrawer.addEventListener("click", () => openBriefAtGlobeCenter());
+    els.closeBriefDrawer.addEventListener("click", () => toggleBriefDrawer(false));
+    els.pickBriefLocation.addEventListener("click", armBriefPickMode);
+    els.pickBriefOnMap.addEventListener("click", armBriefPickMode);
+    els.saveWatchZone.addEventListener("click", saveCurrentWatchZone);
+    els.briefRadiusControls.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-brief-radius]");
+      if (!button) return;
+      state.briefRadiusKm = Number(button.dataset.briefRadius || 100);
+      renderBriefRadiusControls();
+      if (state.briefTarget) loadBriefContext();
+      renderSpatialContext();
+    });
+    els.briefTabs.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-brief-tab]");
+      if (button) setBriefTab(button.dataset.briefTab);
+    });
+    els.historyRange.addEventListener("input", (event) => setHistoryFrame(Number(event.target.value)));
+    els.historyLive.addEventListener("click", returnToLiveHistory);
+    els.downloadDiagnostics.addEventListener("click", downloadDiagnostics);
+    els.openOnboarding.addEventListener("click", () => toggleOnboarding(true));
+    els.toggleGlobeWeather.addEventListener("click", toggleWeatherPalette);
+    els.toggleGlobalWeather.addEventListener("click", toggleGlobalWeatherOverlay);
+    els.toggleWeatherRadar.addEventListener("click", toggleGlobeWeatherOverlay);
     els.toggleGlobeFlood.addEventListener("click", toggleGlobeFloodOverlay);
     els.toggleGlobeTraffic.addEventListener("click", toggleGlobeTrafficOverlay);
     els.openSignalModal.addEventListener("click", () => toggleInsightModal("signal", true));
@@ -484,6 +608,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       renderCatalog();
     });
     els.toggleRadarOverlay.addEventListener("click", toggleRadarOverlay);
+    els.toggleGlobalWeatherMap.addEventListener("click", toggleMapGlobalWeatherOverlay);
     els.toggleFloodOverlay.addEventListener("click", toggleFloodOverlay);
     els.toggleTrafficOverlay.addEventListener("click", toggleMapTrafficOverlay);
 
@@ -540,7 +665,20 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         toggleInsightModal("signal", false);
         toggleInsightModal("layer", false);
         toggleSearchModal(false);
+        toggleOnboarding(false);
       }
+
+      const briefAction = event.target.closest("[data-area-brief]");
+      if (briefAction) {
+        const item = findItem(briefAction.dataset.briefType, briefAction.dataset.briefId);
+        if (item) openBriefForItem(item);
+      }
+
+      const watchAction = event.target.closest("[data-watch-zone-action]");
+      if (watchAction) handleWatchZoneAction(watchAction);
+
+      const removeCustomCamera = event.target.closest("[data-remove-custom-camera]");
+      if (removeCustomCamera) removeCustomCameraById(removeCustomCamera.dataset.removeCustomCamera);
 
       const searchTerm = event.target.closest("[data-search-term]");
       if (searchTerm) {
@@ -554,6 +692,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         state.layerMenuOpen = false;
         renderLayerControls();
       }
+      if (state.weatherPaletteOpen && !event.target.closest("#weatherPalette") && !event.target.closest("#toggleGlobeWeather")) toggleWeatherPalette(false);
     });
 
     document.addEventListener("pointerdown", primeAlertAudio, { once: true, passive: true });
@@ -682,6 +821,13 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   }
 
   function renderSourceDrawer() {
+    const health = sourceHealthCounts(state.snapshot?.sourceHealth || []);
+    const coverage = state.snapshot?.cameraCoverage;
+    els.sourceHealthSummary.innerHTML = state.snapshot
+      ? `<article><span>Responding</span><strong>${formatNumber(health.responding)}/${formatNumber(health.total)}</strong><small>core public adapters</small></article>
+        <article><span>Camera reach</span><strong>${formatNumber(coverage?.countries || 0)}</strong><small>countries | ${formatNumber(coverage?.regions || 0)} regions</small></article>
+        <article><span>Media health</span><strong>${formatNumber(coverage?.health?.verified || 0)}</strong><small>verified | ${formatNumber(coverage?.health?.down || 0)} down</small></article>`
+      : `<p>Source diagnostics will appear after the first public-data refresh.</p>`;
     els.sourceGrid.innerHTML = SOURCE_STACK.map(
       (source) => `<article class="source-card">
         <h3>${source.name}</h3>
@@ -708,10 +854,15 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
 
   async function loadSettings() {
     try {
-      const response = await fetch(`/api/settings?ts=${Date.now()}`);
+      const [response, cameraResponse] = await Promise.all([
+        fetch(`/api/settings?ts=${Date.now()}`),
+        fetch(`/api/custom-cameras?ts=${Date.now()}`),
+      ]);
       if (!response.ok) throw new Error(`Settings failed with status ${response.status}`);
       state.settings = await response.json();
+      state.customCameras = cameraResponse.ok ? (await cameraResponse.json()).cameras || [] : [];
       renderSettings();
+      renderCustomCameras();
     } catch (error) {
       els.settingsStatus.textContent = `Settings unavailable: ${error.message}`;
     }
@@ -751,6 +902,110 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     return "Not configured";
   }
 
+  function renderCustomCameras() {
+    if (!state.customCameras.length) {
+      els.customCameraList.innerHTML = `<div class="empty-state">No personal cameras added. Official adapters remain managed automatically.</div>`;
+      return;
+    }
+    els.customCameraList.innerHTML = state.customCameras.map((camera) => `<div class="custom-camera-row">
+      <span><strong>${escapeHtml(camera.name)}</strong><small>${escapeHtml(camera.area || camera.region || camera.country || "Personal")} | ${escapeHtml(camera.capabilityLabel || camera.viewerType)}</small></span>
+      <button class="text-button" type="button" data-remove-custom-camera="${escapeHtml(camera.id)}">Remove</button>
+    </div>`).join("");
+  }
+
+  async function addCustomCamera() {
+    const camera = {
+      name: els.customCameraName.value.trim(),
+      area: els.customCameraArea.value.trim(),
+      region: els.customCameraArea.value.trim(),
+      country: els.customCameraCountry.value.trim(),
+      lat: Number(els.customCameraLat.value),
+      lng: Number(els.customCameraLng.value),
+      viewerType: els.customCameraType.value,
+      mediaUrl: els.customCameraMediaUrl.value.trim(),
+      sourcePageUrl: els.customCameraSourceUrl.value.trim(),
+    };
+    if (!camera.name || !camera.mediaUrl || !Number.isFinite(camera.lat) || !Number.isFinite(camera.lng)) {
+      els.settingsStatus.textContent = "Camera name, public media URL, latitude, and longitude are required.";
+      return;
+    }
+    try {
+      const response = await fetch("/api/custom-cameras", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ camera }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Camera could not be saved");
+      state.customCameras = payload.cameras || [];
+      [els.customCameraName, els.customCameraArea, els.customCameraCountry, els.customCameraLat, els.customCameraLng, els.customCameraMediaUrl, els.customCameraSourceUrl].forEach((input) => { input.value = ""; });
+      renderCustomCameras();
+      els.settingsStatus.textContent = "Personal camera added to both maps.";
+      refreshSnapshot({ keepSelection: true, quiet: true, force: true });
+    } catch (error) {
+      els.settingsStatus.textContent = error.message;
+    }
+  }
+
+  async function removeCustomCameraById(id) {
+    try {
+      const response = await fetch("/api/custom-cameras", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ removeId: id }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Camera could not be removed");
+      state.customCameras = payload.cameras || [];
+      renderCustomCameras();
+      refreshSnapshot({ keepSelection: true, quiet: true, force: true });
+    } catch (error) {
+      els.settingsStatus.textContent = error.message;
+    }
+  }
+
+  async function recheckCameras() {
+    els.recheckCameras.disabled = true;
+    els.settingsStatus.textContent = "Rechecking a small, diverse sample of public camera feeds...";
+    try {
+      const response = await fetch(`/api/camera-health/recheck?limit=12&ts=${Date.now()}`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Camera recheck failed");
+      els.settingsStatus.textContent = `${formatNumber(payload.checked || 0)} checked | ${formatNumber(payload.healthy || 0)} available | ${formatNumber(payload.failed || 0)} failed this pass.`;
+      await refreshSnapshot({ keepSelection: true, quiet: true, force: true });
+    } catch (error) {
+      els.settingsStatus.textContent = error.message;
+    } finally {
+      els.recheckCameras.disabled = false;
+    }
+  }
+
+  async function checkForUpdates() {
+    if (state.latestRelease?.updateAvailable && state.latestRelease.releaseUrl) {
+      window.open(state.latestRelease.releaseUrl, "_blank", "noopener,noreferrer");
+      return;
+    }
+    els.checkForUpdates.disabled = true;
+    els.settingsStatus.textContent = "Checking the official GitHub release feed...";
+    try {
+      const response = await fetch(`/api/update-status?ts=${Date.now()}`);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || "Release information is unavailable");
+      state.latestRelease = payload;
+      if (payload.updateAvailable) {
+        els.settingsStatus.textContent = `Oversee ${payload.latestVersion} is available. Press Download Update to open the official release.`;
+        els.checkForUpdates.innerHTML = `<i data-lucide="download"></i>Download ${escapeHtml(payload.latestVersion)}`;
+      } else {
+        els.settingsStatus.textContent = `Oversee ${payload.currentVersion} is the latest published release.`;
+      }
+      if (globalThis.lucide) globalThis.lucide.createIcons();
+    } catch (error) {
+      els.settingsStatus.textContent = error.message;
+    } finally {
+      els.checkForUpdates.disabled = false;
+    }
+  }
+
   async function saveSettings(event) {
     event.preventDefault();
     const formData = new FormData(els.settingsForm);
@@ -785,6 +1040,435 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     els.alertDrawer.classList.toggle("open", shouldOpen);
     els.alertDrawer.setAttribute("aria-hidden", shouldOpen ? "false" : "true");
     els.openAlertDrawer.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+    if (shouldOpen) toggleBriefDrawer(false);
+  }
+
+  function toggleBriefDrawer(open) {
+    state.briefOpen = Boolean(open);
+    els.briefDrawer.classList.toggle("open", state.briefOpen);
+    els.briefDrawer.setAttribute("aria-hidden", state.briefOpen ? "false" : "true");
+    if (state.briefOpen) {
+      toggleAlertDrawer(false);
+      renderBriefRadiusControls();
+      renderBriefOverview();
+      renderBriefWatches();
+      if (!state.historyLoaded) loadHistory();
+    } else {
+      state.briefPickMode = false;
+      els.briefDrawer.classList.remove("pick-mode");
+    }
+  }
+
+  function openBriefAtGlobeCenter() {
+    const center = currentGlobeCenter();
+    setBriefTarget(center.lat, center.lng, "Globe center");
+  }
+
+  function openBriefForItem(item) {
+    const lat = Number(item?.lat);
+    const lng = Number(item?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const label = item.name || item.title || item.callsign || item.area || "Selected location";
+    setBriefTarget(lat, lng, label);
+  }
+
+  function armBriefPickMode() {
+    state.briefPickMode = true;
+    toggleBriefDrawer(true);
+    els.briefDrawer.classList.add("pick-mode");
+    els.briefSubtitle.textContent = "Click an empty point on either map to inspect that area.";
+  }
+
+  function setBriefTarget(lat, lng, label = "Selected location") {
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
+    state.briefTarget = { lat: Number(lat), lng: Number(lng), label: String(label || "Selected location") };
+    state.briefPickMode = false;
+    els.briefDrawer.classList.remove("pick-mode");
+    els.briefTitle.textContent = state.briefTarget.label;
+    els.briefSubtitle.textContent = `${formatLatLng(lat, lng)} | ${state.briefRadiusKm} km radius`;
+    toggleBriefDrawer(true);
+    loadBriefContext();
+    renderSpatialContext();
+  }
+
+  function currentGlobeCenter() {
+    if (state.globeRenderer === "cesium" && cesiumGlobe.ready && globalThis.Cesium) {
+      const viewer = cesiumGlobe.viewer;
+      const canvas = viewer.scene.canvas;
+      const point = viewer.camera.pickEllipsoid(new globalThis.Cesium.Cartesian2(canvas.clientWidth / 2, canvas.clientHeight / 2), viewer.scene.globe.ellipsoid);
+      if (point) {
+        const cartographic = globalThis.Cesium.Cartographic.fromCartesian(point);
+        return { lat: globalThis.Cesium.Math.toDegrees(cartographic.latitude), lng: globalThis.Cesium.Math.toDegrees(cartographic.longitude) };
+      }
+    }
+    if (globe.raycaster && globe.camera && globe.earth) {
+      globe.raycaster.setFromCamera({ x: 0, y: 0 }, globe.camera);
+      const hit = globe.raycaster.intersectObject(globe.earth, false)[0];
+      if (hit?.point) {
+        const local = globe.worldGroup.worldToLocal(hit.point.clone());
+        return vector3ToLatLng(local);
+      }
+    }
+    const scope = SCOPES.find((entry) => entry.id === state.scope) || SCOPES[0];
+    return { lat: scope.center[0], lng: scope.center[1] };
+  }
+
+  function vector3ToLatLng(point) {
+    const radius = Math.max(0.0001, point.length());
+    const lat = Math.asin(point.y / radius) * 180 / Math.PI;
+    let lng = Math.atan2(point.z, -point.x) * 180 / Math.PI - 180;
+    while (lng < -180) lng += 360;
+    while (lng > 180) lng -= 360;
+    return { lat, lng };
+  }
+
+  async function loadBriefContext() {
+    if (!state.briefTarget) return;
+    const token = ++state.briefRequestToken;
+    state.briefContext = null;
+    renderBriefOverview({ loading: true });
+    const { lat, lng } = state.briefTarget;
+    try {
+      const response = await fetch(`/api/location-context?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}&radiusKm=${encodeURIComponent(state.briefRadiusKm)}&ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`Location context failed with status ${response.status}`);
+      const context = await response.json();
+      if (token !== state.briefRequestToken) return;
+      state.briefContext = context;
+    } catch (error) {
+      if (token !== state.briefRequestToken) return;
+      state.briefContext = { error: error.message, aviation: { stations: [], advisories: [] }, traffic: { incidents: [] }, airQuality: { configured: false, stations: [] } };
+    }
+    renderBriefOverview();
+    renderSpatialContext();
+  }
+
+  function renderBriefRadiusControls() {
+    els.briefRadiusControls.querySelectorAll("[data-brief-radius]").forEach((button) => {
+      button.classList.toggle("active", Number(button.dataset.briefRadius) === state.briefRadiusKm);
+    });
+    if (state.briefTarget) els.briefSubtitle.textContent = `${formatLatLng(state.briefTarget.lat, state.briefTarget.lng)} | ${state.briefRadiusKm} km radius`;
+  }
+
+  function setBriefTab(tab) {
+    state.briefTab = ["overview", "watches", "history"].includes(tab) ? tab : "overview";
+    els.briefTabs.querySelectorAll("[data-brief-tab]").forEach((button) => button.classList.toggle("active", button.dataset.briefTab === state.briefTab));
+    els.briefOverview.classList.toggle("active", state.briefTab === "overview");
+    els.briefWatches.classList.toggle("active", state.briefTab === "watches");
+    els.briefHistory.classList.toggle("active", state.briefTab === "history");
+    if (state.briefTab === "watches") {
+      state.watchZoneUnread = 0;
+      renderBriefWatches();
+    }
+    if (state.briefTab === "history") loadHistory();
+  }
+
+  function renderBriefOverview(options = {}) {
+    if (!state.briefTarget) {
+      els.briefOverview.innerHTML = `<div class="empty-state">Choose Area Brief to inspect the center of the globe, or use Pick Point.</div>`;
+      return;
+    }
+    const nearby = collectNearbySignals(state.snapshot || buildFallbackSnapshot(), state.briefTarget, state.briefRadiusKm, { maxPerType: 60 });
+    const weather = state.briefContext?.weather;
+    const aviation = state.briefContext?.aviation || { stations: [], advisories: [] };
+    const traffic = state.briefContext?.traffic || { incidents: [] };
+    const airQuality = state.briefContext?.airQuality || { configured: false, stations: [] };
+    const hazards = [...nearby.alerts, ...nearby.fires, ...nearby.quakes].sort((left, right) => left.distanceKm - right.distanceKm);
+    const moving = [...nearby.flights, ...nearby.satellites, ...nearby.vessels].sort((left, right) => left.distanceKm - right.distanceKm);
+    const weatherCard = options.loading
+      ? `<article class="brief-card"><span class="kicker">Live Context</span><h3>Loading local conditions</h3><p>Gathering weather, aviation observations, and road incidents for this radius.</p></article>`
+      : weather
+        ? `<article class="brief-card"><span class="kicker">Weather Now</span><h3>${escapeHtml(weatherCodeLabel(weather.weatherCode))} | ${weather.temperatureC == null ? "--" : `${Math.round(weather.temperatureC)} C`}</h3><p>Feels ${weather.apparentTemperatureC == null ? "unknown" : `${Math.round(weather.apparentTemperatureC)} C`} | Wind ${weather.windKmh == null ? "--" : `${Math.round(weather.windKmh)} km/h`} | Gusts ${weather.windGustKmh == null ? "--" : `${Math.round(weather.windGustKmh)} km/h`} | Clouds ${weather.cloudCoverPercent == null ? "--" : `${Math.round(weather.cloudCoverPercent)}%`}</p></article>`
+        : `<article class="brief-card attention"><span class="kicker">Weather</span><h3>Conditions unavailable</h3><p>${escapeHtml(state.briefContext?.error || "The public forecast source did not respond.")}</p></article>`;
+    const space = state.snapshot?.spaceWeather;
+    els.briefOverview.innerHTML = `<div class="brief-stack">
+      <article class="brief-card">
+        <span class="kicker">Within ${formatNumber(state.briefRadiusKm)} km</span>
+        <h3>${escapeHtml(state.briefTarget.label)}</h3>
+        <div class="brief-stat-grid">
+          ${briefStat(hazards.length, "Hazards")}
+          ${briefStat(nearby.cameras.length, "Cameras")}
+          ${briefStat(moving.length, "Moving")}
+          ${briefStat(traffic.incidents?.length || 0, "Road events")}
+          ${briefStat(aviation.stations?.length || 0, "Airports")}
+          ${briefStat(nearby.total, "Signals")}
+        </div>
+      </article>
+      ${weatherCard}
+      ${renderBriefListCard("Nearby hazards", hazards, 7)}
+      ${renderTrafficIncidentCard(traffic)}
+      ${renderAviationCard(aviation)}
+      ${renderAirQualityCard(airQuality)}
+      ${renderBriefListCard("Nearest cameras", nearby.cameras, 6)}
+      ${renderBriefListCard("Moving assets", moving, 6)}
+      ${space ? `<article class="brief-card"><span class="kicker">Space Weather</span><h3>${escapeHtml(space.geomagneticLevel || "Unknown")} geomagnetic conditions${space.kp == null ? "" : ` | Kp ${Number(space.kp).toFixed(1)}`}</h3><p>${escapeHtml(shorten(space.alerts?.[0]?.message || "No recent NOAA space-weather alert in the loaded summary.", 220))}</p></article>` : ""}
+    </div>`;
+    if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function briefStat(value, label) {
+    return `<div class="brief-stat"><strong>${formatNumber(value || 0)}</strong><span>${escapeHtml(label)}</span></div>`;
+  }
+
+  function renderBriefListCard(title, items, limit) {
+    if (!items?.length) return `<article class="brief-card"><h3>${escapeHtml(title)}</h3><p>Nothing from the currently loaded public sources is inside this radius.</p></article>`;
+    const rows = items.slice(0, limit).map((item) => `<button class="brief-item" type="button" data-select-type="${escapeHtml(item.signalType || inferSignalType(item))}" data-select-id="${escapeHtml(item.id)}">
+      <span><strong>${escapeHtml(item.name || item.title || item.event || item.callsign || item.id)}</strong><small>${escapeHtml(shorten(assetSubtitle(item.signalType || inferSignalType(item), item), 90))}</small></span>
+      <em>${Number(item.distanceKm || 0).toFixed(item.distanceKm < 10 ? 1 : 0)} km</em>
+    </button>`).join("");
+    return `<article class="brief-card"><h3>${escapeHtml(title)}</h3><div class="brief-list">${rows}</div></article>`;
+  }
+
+  function renderTrafficIncidentCard(traffic) {
+    if (!traffic?.configured) return `<article class="brief-card"><span class="kicker">Road Incidents</span><h3>Optional live layer</h3><p>Add a TomTom key in Settings to show current crashes, closures, construction, and delays. Modeled road flow remains clearly labeled without it.</p></article>`;
+    if (!traffic.incidents?.length) return `<article class="brief-card"><span class="kicker">Road Incidents</span><h3>No reported incidents nearby</h3><p>TomTom returned no present incidents in the city-scale search area.</p></article>`;
+    const rows = traffic.incidents.slice(0, 8).map((item) => `<div class="brief-item"><span><strong>${escapeHtml(item.name || item.categoryLabel)}</strong><small>${escapeHtml([item.from, item.to].filter(Boolean).join(" to ") || item.roads?.join(", ") || "Mapped road event")}</small></span><em>${item.delaySeconds ? `${Math.round(item.delaySeconds / 60)} min` : "live"}</em></div>`).join("");
+    return `<article class="brief-card attention"><span class="kicker">Live Road Incidents</span><h3>${traffic.incidents.length} current reports</h3><div class="brief-list">${rows}</div></article>`;
+  }
+
+  function renderAviationCard(aviation) {
+    const stations = aviation?.stations || [];
+    const advisories = aviation?.advisories || [];
+    if (!stations.length && !advisories.length) return `<article class="brief-card"><span class="kicker">Aviation Weather</span><h3>No nearby observations</h3><p>No recent METAR or aviation advisory was returned inside this radius.</p></article>`;
+    const stationRows = stations.slice(0, 5).map((station) => `<div class="brief-item"><span><strong>${escapeHtml(station.station)} ${station.category ? `| ${escapeHtml(station.category)}` : ""}</strong><small>${station.temperatureC == null ? "Temperature unknown" : `${Math.round(station.temperatureC)} C`} | Wind ${station.windKnots == null ? "--" : `${Math.round(station.windKnots)} kt`} | Vis ${station.visibilityMiles == null ? "--" : `${station.visibilityMiles} mi`}</small></span><em>${station.distanceKm == null ? "" : `${station.distanceKm} km`}</em></div>`).join("");
+    return `<article class="brief-card ${advisories.length ? "attention" : ""}"><span class="kicker">Aviation Weather</span><h3>${stations.length} airport observations | ${advisories.length} advisories</h3><div class="brief-list">${stationRows}</div></article>`;
+  }
+
+  function renderAirQualityCard(airQuality) {
+    if (!airQuality?.configured) return "";
+    const stations = airQuality.stations || [];
+    if (!stations.length) return `<article class="brief-card"><span class="kicker">Air Quality</span><h3>No monitors within 25 km</h3><p>OpenAQ returned no recent public monitor locations near this point.</p></article>`;
+    const rows = stations.slice(0, 5).map((station) => {
+      const measurements = (station.measurements || []).slice(0, 3).map((measurement) => `${measurement.parameter} ${formatMeasurement(measurement.value)}${measurement.units ? ` ${measurement.units}` : ""}`).join(" | ");
+      return `<div class="brief-item"><span><strong>${escapeHtml(station.name || "OpenAQ monitor")}</strong><small>${escapeHtml(measurements || "Monitor found; latest reading unavailable")}</small></span><em>${station.distanceMeters == null ? "" : `${(station.distanceMeters / 1000).toFixed(1)} km`}</em></div>`;
+    }).join("");
+    return `<article class="brief-card"><span class="kicker">Air Quality | OpenAQ</span><h3>${stations.length} nearby public monitors</h3><div class="brief-list">${rows}</div><p>Values are reported as published by each provider; this card does not calculate a health index.</p></article>`;
+  }
+
+  function formatMeasurement(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "--";
+    if (Math.abs(number) < 1) return number.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+    return number.toFixed(number < 100 ? 1 : 0).replace(/\.0$/, "");
+  }
+
+  function inferSignalType(item) {
+    if (item.callsign || item.icao24) return "flight";
+    if (item.magnitude != null) return "quake";
+    if (item.frp != null || item.subtype === "incident" || item.subtype === "perimeter") return "fire";
+    if (item.event || item.urgency) return "alert";
+    if (item.capability || item.viewerType) return "camera";
+    if (item.noradId || item.altitudeKm) return "satellite";
+    if (item.mmsi) return "vessel";
+    return item.type || "alert";
+  }
+
+  function weatherCodeLabel(code) {
+    const value = Number(code);
+    if (value === 0) return "Clear";
+    if ([1, 2].includes(value)) return "Partly cloudy";
+    if (value === 3) return "Overcast";
+    if ([45, 48].includes(value)) return "Fog";
+    if (value >= 51 && value <= 67) return "Rain";
+    if (value >= 71 && value <= 77) return "Snow";
+    if (value >= 80 && value <= 82) return "Rain showers";
+    if (value >= 85 && value <= 86) return "Snow showers";
+    if (value >= 95) return "Thunderstorms";
+    return "Current conditions";
+  }
+
+  function saveCurrentWatchZone() {
+    if (!state.briefTarget || !state.snapshot) return;
+    const existing = state.watchZones.find((zone) => distanceKm(zone.lat, zone.lng, state.briefTarget.lat, state.briefTarget.lng) < 2 && zone.radiusKm === state.briefRadiusKm);
+    const evaluation = evaluateWatchZone({ ...state.briefTarget, radiusKm: state.briefRadiusKm }, state.snapshot);
+    const zone = existing || {
+      id: `watch-${Date.now().toString(36)}-${Math.abs(Math.round(state.briefTarget.lat * 1000)).toString(36)}`,
+      createdAt: new Date().toISOString(),
+      unread: 0,
+      recent: [],
+    };
+    Object.assign(zone, {
+      name: state.briefTarget.label || formatLatLng(state.briefTarget.lat, state.briefTarget.lng),
+      lat: state.briefTarget.lat,
+      lng: state.briefTarget.lng,
+      radiusKm: state.briefRadiusKm,
+      lastSignalIds: evaluation.currentIds,
+      evaluatedAt: evaluation.evaluatedAt,
+    });
+    if (!existing) state.watchZones.unshift(zone);
+    saveWatchZones();
+    renderBriefWatches();
+    setBriefTab("watches");
+  }
+
+  function evaluateWatchZones() {
+    if (!state.snapshot || !state.watchZones.length) return;
+    let newTotal = 0;
+    for (const zone of state.watchZones) {
+      const result = evaluateWatchZone(zone, state.snapshot);
+      const isBaseline = !zone.evaluatedAt;
+      const newItems = isBaseline ? [] : result.newItems;
+      if (newItems.length) {
+        zone.unread = Number(zone.unread || 0) + newItems.length;
+        zone.recent = newItems.slice(0, 8).map((item) => ({ id: item.id, type: item.signalType, title: item.name || item.title || item.event || item.callsign || item.id }));
+        newTotal += newItems.length;
+      }
+      zone.lastSignalIds = result.currentIds;
+      zone.signalCount = result.count;
+      zone.evaluatedAt = result.evaluatedAt;
+    }
+    if (newTotal) {
+      state.watchZoneUnread += newTotal;
+      cueNewAlert(newTotal);
+      showWatchNotification(newTotal);
+    }
+    saveWatchZones();
+    renderBriefWatches();
+  }
+
+  function renderBriefWatches() {
+    const unread = state.watchZones.reduce((sum, zone) => sum + Number(zone.unread || 0), 0);
+    els.watchZoneBadge.textContent = formatNumber(unread || state.watchZones.length);
+    if (!state.watchZones.length) {
+      els.briefWatches.innerHTML = `<div class="empty-state">No watched areas yet. Open an Area Brief, choose a radius, and press Watch Area.</div>`;
+      return;
+    }
+    const cards = state.watchZones.map((zone) => `<article class="watch-zone-card ${zone.unread ? "has-new" : ""}">
+      <h3>${escapeHtml(zone.name)}</h3>
+      <p>${formatLatLng(zone.lat, zone.lng)} | ${formatNumber(zone.radiusKm)} km | ${formatNumber(zone.signalCount || 0)} monitored signals</p>
+      ${zone.unread ? `<small>${formatNumber(zone.unread)} newly observed: ${escapeHtml((zone.recent || []).map((item) => item.title).slice(0, 3).join("; "))}</small>` : `<small>Checked ${formatTimeAgo(zone.evaluatedAt || zone.createdAt)}</small>`}
+      <div class="watch-zone-actions">
+        <button class="text-button" type="button" data-watch-zone-action="open" data-watch-zone-id="${escapeHtml(zone.id)}">Open</button>
+        ${zone.unread ? `<button class="text-button" type="button" data-watch-zone-action="read" data-watch-zone-id="${escapeHtml(zone.id)}">Mark Read</button>` : ""}
+        <button class="text-button" type="button" data-watch-zone-action="remove" data-watch-zone-id="${escapeHtml(zone.id)}">Remove</button>
+      </div>
+    </article>`).join("");
+    const notificationAction = globalThis.Notification && globalThis.Notification.permission !== "granted"
+      ? `<button class="text-button" type="button" data-watch-zone-action="notifications">Enable desktop notices</button>`
+      : `<small>Desktop notices ${globalThis.Notification && globalThis.Notification.permission === "granted" ? "enabled" : "are unavailable in this runtime"}.</small>`;
+    els.briefWatches.innerHTML = `<div class="watch-zone-list">${cards}<div class="brief-card">${notificationAction}</div></div>`;
+  }
+
+  function handleWatchZoneAction(action) {
+    const kind = action.dataset.watchZoneAction;
+    if (kind === "notifications") {
+      globalThis.Notification?.requestPermission?.().then(() => renderBriefWatches());
+      return;
+    }
+    const zone = state.watchZones.find((entry) => entry.id === action.dataset.watchZoneId);
+    if (!zone) return;
+    if (kind === "open") {
+      zone.unread = 0;
+      state.briefRadiusKm = zone.radiusKm;
+      renderBriefRadiusControls();
+      setBriefTarget(zone.lat, zone.lng, zone.name);
+      focusGlobeOnItem({ lat: zone.lat, lng: zone.lng });
+    } else if (kind === "read") {
+      zone.unread = 0;
+      zone.recent = [];
+    } else if (kind === "remove") {
+      state.watchZones = state.watchZones.filter((entry) => entry.id !== zone.id);
+    }
+    saveWatchZones();
+    renderBriefWatches();
+  }
+
+  function showWatchNotification(count) {
+    if (!globalThis.Notification || Notification.permission !== "granted") return;
+    try {
+      new Notification("Oversee watch-area update", { body: `${count} newly observed public signal${count === 1 ? "" : "s"} appeared inside watched areas.`, silent: true });
+    } catch {
+      // Some WebViews expose Notification but do not permit constructing one.
+    }
+  }
+
+  function loadWatchZones() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem("oversee:watch-zones") || "[]");
+      return Array.isArray(parsed) ? parsed.slice(0, 50) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function saveWatchZones() {
+    localStorage.setItem("oversee:watch-zones", JSON.stringify(state.watchZones.slice(0, 50)));
+  }
+
+  async function loadHistory() {
+    try {
+      const response = await fetch(`/api/history?scope=${encodeURIComponent(state.scope)}&limit=576&ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`History failed with status ${response.status}`);
+      const payload = await response.json();
+      state.historySamples = payload.samples || [];
+      state.historyLoaded = true;
+    } catch {
+      state.historySamples = [];
+      state.historyLoaded = true;
+    }
+    renderHistoryPanel();
+  }
+
+  function renderHistoryPanel() {
+    const count = state.historySamples.length;
+    els.historyRange.max = String(Math.max(0, count - 1));
+    els.historyRange.disabled = count === 0;
+    els.historyLive.disabled = !state.playbackSample;
+    if (!count) {
+      els.historyTime.textContent = "History begins after the first five-minute sample";
+      els.historySummary.innerHTML = `<h3>No recorded frames yet</h3><p>Oversee stores a bounded local operating-picture history and will keep collecting while it runs.</p>`;
+      return;
+    }
+    if (!state.playbackSample) {
+      els.historyRange.value = String(count - 1);
+      els.historyTime.textContent = `Live | ${count} local frame${count === 1 ? "" : "s"}`;
+      renderHistorySummary(state.historySamples[count - 1], true);
+    }
+  }
+
+  function setHistoryFrame(index) {
+    const sample = state.historySamples[clamp(Math.round(index), 0, Math.max(0, state.historySamples.length - 1))];
+    if (!sample) return;
+    state.playbackSample = sample;
+    els.historyTime.textContent = new Date(sample.time).toLocaleString();
+    els.historyLive.disabled = false;
+    renderHistorySummary(sample, false);
+    renderSpatialContext();
+  }
+
+  function returnToLiveHistory() {
+    state.playbackSample = null;
+    renderHistoryPanel();
+    renderSpatialContext();
+  }
+
+  function renderHistorySummary(sample, live) {
+    const metrics = sample?.metrics || {};
+    const points = historyFrameItems(sample);
+    els.historySummary.innerHTML = `<span class="kicker">${live ? "Latest recorded frame" : "Playback frame"}</span><h3>${formatNumber(points.length)} sampled map signals</h3><p>${formatNumber(metrics.alerts || 0)} alerts | ${formatNumber(metrics.fires || 0)} fire signals | ${formatNumber(metrics.cameraFeeds || 0)} cameras | ${formatNumber(metrics.assets || 0)} assets in the original snapshot.</p>`;
+  }
+
+  async function downloadDiagnostics() {
+    try {
+      const response = await fetch(`/api/diagnostics?ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`Diagnostics failed with status ${response.status}`);
+      const payload = await response.json();
+      const blob = new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `oversee-diagnostics-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      els.settingsStatus.textContent = "Diagnostic report exported without API key values.";
+    } catch (error) {
+      els.settingsStatus.textContent = error.message;
+    }
+  }
+
+  function toggleOnboarding(open) {
+    els.onboardingModal.classList.toggle("open", Boolean(open));
+    els.onboardingModal.setAttribute("aria-hidden", open ? "false" : "true");
+    if (!open) localStorage.setItem("oversee:onboarding-v3", "seen");
   }
 
   function toggleIdleSpin() {
@@ -1296,6 +1980,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       }
       state.seenAlertIds = currentAlertIds;
       updateTrackHistory(state.snapshot);
+      evaluateWatchZones();
       updateSystemStatusAge({ force: true });
       renderAll();
 
@@ -1324,6 +2009,11 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     renderCatalog();
     renderCameraMap();
     renderGlobeLayers();
+    renderSourceDrawer();
+    if (state.briefOpen) {
+      renderBriefOverview();
+      renderBriefWatches();
+    }
     els.theaterSubtitle.textContent = subtitleForScope();
     if (globalThis.lucide) globalThis.lucide.createIcons();
   }
@@ -1819,6 +2509,15 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     globe.selectionGroup = new THREE.Group();
     globe.selectionGroup.name = "selection-focus";
     globe.worldGroup.add(globe.selectionGroup);
+    globe.briefGroup = new THREE.Group();
+    globe.briefGroup.name = "area-brief";
+    globe.worldGroup.add(globe.briefGroup);
+    globe.historyGroup = new THREE.Group();
+    globe.historyGroup.name = "history-playback";
+    globe.worldGroup.add(globe.historyGroup);
+    globe.weatherGroup = new THREE.Group();
+    globe.weatherGroup.name = "global-weather";
+    globe.worldGroup.add(globe.weatherGroup);
 
     els.globeCanvas.addEventListener("pointerdown", (event) => {
       globe.dragging = false;
@@ -1889,6 +2588,14 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       }
       cesiumGlobe.selectionSource = new Cesium.CustomDataSource("oversee-selection");
       await viewer.dataSources.add(cesiumGlobe.selectionSource);
+      cesiumGlobe.briefSource = new Cesium.CustomDataSource("oversee-area-brief");
+      await viewer.dataSources.add(cesiumGlobe.briefSource);
+      cesiumGlobe.historySource = new Cesium.CustomDataSource("oversee-history-playback");
+      await viewer.dataSources.add(cesiumGlobe.historySource);
+      cesiumGlobe.incidentSource = new Cesium.CustomDataSource("oversee-traffic-incidents");
+      await viewer.dataSources.add(cesiumGlobe.incidentSource);
+      cesiumGlobe.weatherGridSource = new Cesium.CustomDataSource("oversee-global-weather");
+      await viewer.dataSources.add(cesiumGlobe.weatherGridSource);
       cesiumGlobe.trafficLayer = new CesiumRoadTrafficLayer({ viewer, Cesium });
 
       await updateCesiumBaseLayer();
@@ -1899,11 +2606,27 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       viewer.screenSpaceEventHandler.setInputAction((movement) => {
         const picked = viewer.scene.pick(movement.position);
         const data = picked?.id?.oversee;
-        if (data?.item) selectObject(data.type, displayItemForGlobe(data.type, data.item), { focus: false });
+        if (data?.trafficIncident) {
+          const incident = data.trafficIncident;
+          setBriefTarget(Number(incident.lat), Number(incident.lng), incident.description || "Traffic incident");
+          focusGlobeOnItem(incident);
+          return;
+        }
+        if (data?.item) {
+          selectObject(data.type, displayItemForGlobe(data.type, data.item), { focus: false });
+          return;
+        }
+        if (state.briefPickMode) {
+          const point = viewer.camera.pickEllipsoid(movement.position, viewer.scene.globe.ellipsoid);
+          if (!point) return;
+          const cartographic = Cesium.Cartographic.fromCartesian(point);
+          setBriefTarget(Cesium.Math.toDegrees(cartographic.latitude), Cesium.Math.toDegrees(cartographic.longitude), "Picked globe location");
+        }
       }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
       viewer.camera.moveEnd.addEventListener(() => {
         renderCesiumLayers();
         scheduleGlobeTrafficRefresh();
+        scheduleGlobalWeatherRefresh();
       });
 
       cesiumGlobe.ready = true;
@@ -1992,9 +2715,72 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     await updateCesiumWeatherLayer();
   }
 
+  function toggleWeatherPalette(open) {
+    state.weatherPaletteOpen = typeof open === "boolean" ? open : !state.weatherPaletteOpen;
+    els.weatherPalette.classList.toggle("open", state.weatherPaletteOpen);
+    els.weatherPalette.setAttribute("aria-hidden", state.weatherPaletteOpen ? "false" : "true");
+  }
+
+  async function toggleGlobalWeatherOverlay() {
+    state.globalWeatherOverlay = !state.globalWeatherOverlay;
+    els.toggleGlobalWeather.classList.toggle("active", state.globalWeatherOverlay);
+    els.toggleGlobalWeather.setAttribute("aria-pressed", state.globalWeatherOverlay ? "true" : "false");
+    updateWeatherMasterButton();
+    if (!state.globalWeatherOverlay) {
+      state.globalWeatherPoints = [];
+      els.weatherGridStatus.textContent = "Global conditions off";
+      renderSpatialContext();
+      return;
+    }
+    await refreshGlobalWeatherOverlay();
+  }
+
+  function scheduleGlobalWeatherRefresh() {
+    if (!state.globalWeatherOverlay) return;
+    window.clearTimeout(state.globalWeatherRefreshTimer);
+    state.globalWeatherRefreshTimer = window.setTimeout(refreshGlobalWeatherOverlay, 650);
+  }
+
+  async function refreshGlobalWeatherOverlay() {
+    if (!state.globalWeatherOverlay) return;
+    const token = ++state.globalWeatherRequestToken;
+    const bounds = globeWeatherBounds();
+    els.weatherGridStatus.textContent = "Loading viewport conditions";
+    try {
+      const bbox = `${bounds.west},${bounds.south},${bounds.east},${bounds.north}`;
+      const response = await fetch(`/api/weather/grid?bbox=${encodeURIComponent(bbox)}&points=48&ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`Weather grid failed with status ${response.status}`);
+      const payload = await response.json();
+      if (token !== state.globalWeatherRequestToken) return;
+      state.globalWeatherPoints = payload.points || [];
+      els.weatherGridStatus.textContent = `${state.globalWeatherPoints.length} current model points | ${payload.stale ? "saved cache" : "Open-Meteo"}`;
+    } catch (error) {
+      if (token !== state.globalWeatherRequestToken) return;
+      els.weatherGridStatus.textContent = error.message;
+    }
+    renderSpatialContext();
+  }
+
+  function globeWeatherBounds() {
+    if (state.globeRenderer === "cesium" && cesiumGlobe.ready) {
+      const bounds = cesiumViewBounds();
+      if (bounds) return { west: bounds.west, south: clamp(bounds.south, -75, 75), east: bounds.east, north: clamp(bounds.north, -75, 75) };
+    }
+    if (state.scope === "us") return { west: -128, south: 22, east: -64, north: 52 };
+    if (state.scope === "west") return { west: -132, south: 29, east: -101, north: 54 };
+    return { west: -179.9, south: -70, east: 179.9, north: 70 };
+  }
+
+  function updateWeatherMasterButton() {
+    const active = state.globalWeatherOverlay || state.globeWeatherOverlay;
+    els.toggleGlobeWeather.classList.toggle("active", active);
+    els.toggleGlobeWeather.setAttribute("aria-pressed", active ? "true" : "false");
+    els.toggleWeatherRadar.classList.toggle("active", state.globeWeatherOverlay);
+    els.toggleWeatherRadar.setAttribute("aria-pressed", state.globeWeatherOverlay ? "true" : "false");
+  }
+
   async function updateCesiumWeatherLayer() {
-    els.toggleGlobeWeather.classList.toggle("active", state.globeWeatherOverlay);
-    els.toggleGlobeWeather.setAttribute("aria-pressed", state.globeWeatherOverlay ? "true" : "false");
+    updateWeatherMasterButton();
 
     const viewer = cesiumGlobe.viewer;
     if (!viewer || !globalThis.Cesium) {
@@ -2018,8 +2804,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const provider = await makeNoaaRadarProvider();
     if (!provider) {
       state.globeWeatherOverlay = false;
-      els.toggleGlobeWeather.classList.remove("active");
-      els.toggleGlobeWeather.setAttribute("aria-pressed", "false");
+      updateWeatherMasterButton();
       return;
     }
     cesiumGlobe.weatherLayer = viewer.imageryLayers.addImageryProvider(provider);
@@ -2138,20 +2923,25 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     else removeCesiumTrafficImagery();
     const boundsKey = `${view.detail}:${view.bbox}`;
     if (cesiumGlobe.trafficBoundsKey === boundsKey && cesiumGlobe.trafficLayer.particles.length) {
-      renderTrafficModeStatus(els.globeTrafficStatus, status);
+      renderTrafficModeStatus(els.globeTrafficStatus, status, "", state.globeTrafficIncidents.length);
       return;
     }
 
     const requestToken = ++cesiumGlobe.trafficRequestToken;
     setTrafficStatusChip(els.globeTrafficStatus, "Loading roads", { state: "loading" });
     try {
-      const response = await fetch(`/api/traffic/roads?bbox=${encodeURIComponent(view.bbox)}&detail=${view.detail}&ts=${Date.now()}`);
+      const [response, incidentPayload] = await Promise.all([
+        fetch(`/api/traffic/roads?bbox=${encodeURIComponent(view.bbox)}&detail=${view.detail}&ts=${Date.now()}`),
+        fetchTrafficIncidentsForView(view, status),
+      ]);
       const payload = await response.json();
       if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || `Road query failed with ${response.status}`);
       if (requestToken !== cesiumGlobe.trafficRequestToken || !state.globeTrafficOverlay) return;
       cesiumGlobe.trafficBoundsKey = boundsKey;
+      state.globeTrafficIncidents = incidentPayload.incidents;
       cesiumGlobe.trafficLayer.setRoads(payload.roads, { mode: status.mode });
-      renderTrafficModeStatus(els.globeTrafficStatus, status, payload.roads.length ? "" : "No mapped major roads in view");
+      renderCesiumSpatialContext();
+      renderTrafficModeStatus(els.globeTrafficStatus, status, payload.roads.length ? "" : "No mapped major roads in view", state.globeTrafficIncidents.length);
       if (status.mode === "live") {
         window.setTimeout(async () => {
           if (!state.globeTrafficOverlay) return;
@@ -2162,6 +2952,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     } catch (error) {
       if (requestToken !== cesiumGlobe.trafficRequestToken) return;
       cesiumGlobe.trafficLayer.clear();
+      state.globeTrafficIncidents = [];
+      renderCesiumSpatialContext();
       setTrafficStatusChip(els.globeTrafficStatus, "Road layer unavailable", { state: "error", title: error.message });
     }
   }
@@ -2220,12 +3012,14 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     window.clearTimeout(cesiumGlobe.trafficRefreshTimer);
     cesiumGlobe.trafficRequestToken += 1;
     cesiumGlobe.trafficBoundsKey = "";
+    state.globeTrafficIncidents = [];
     removeCesiumTrafficImagery();
     cesiumGlobe.trafficLayer?.clear();
     cesiumGlobe.trafficLayer?.setVisible(false);
+    renderCesiumSpatialContext();
   }
 
-  function renderTrafficModeStatus(element, status, override = "") {
+  function renderTrafficModeStatus(element, status, override = "", incidentCount = 0) {
     if (override) {
       setTrafficStatusChip(element, override, { state: "empty", title: status?.detail || "" });
       return;
@@ -2238,7 +3032,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
           : status.health === "ready"
             ? "Live traffic ready"
             : "Live traffic · TomTom";
-      setTrafficStatusChip(element, healthLabel, {
+      const incidentLabel = incidentCount ? ` | ${formatNumber(incidentCount)} incidents` : "";
+      setTrafficStatusChip(element, `${healthLabel}${incidentLabel}`, {
         state: status.health === "degraded" || status.health === "budget-exhausted" ? "error" : "live",
         title: [status.detail, status.message].filter(Boolean).join(" "),
       });
@@ -2374,7 +3169,191 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     if (state.layers.vessels) addMarkers("vessels", filterByQuery(snapshot.vessels || []), "vessel");
     if (state.layers.launches) addMarkers("launches", filterByQuery(snapshot.launches || []), "launch");
     if (state.layers.radio) addMarkers("radio", filterByQuery(snapshot.radio || []), "radio");
+    renderThreeSpatialContext();
     renderSelectedGlobeFocus();
+  }
+
+  function renderSpatialContext() {
+    if (state.globeRenderer === "cesium") renderCesiumSpatialContext();
+    else renderThreeSpatialContext();
+    renderBriefOnFlatMap();
+  }
+
+  function renderThreeSpatialContext() {
+    if (!globe.briefGroup || !globe.historyGroup || !globe.weatherGroup) return;
+    clearGroup(globe.briefGroup);
+    clearGroup(globe.historyGroup);
+    clearGroup(globe.weatherGroup);
+    if (state.briefTarget) {
+      const { lat, lng } = state.briefTarget;
+      globe.briefGroup.add(makePathLine(makeGeoCircle(lat, lng, state.briefRadiusKm), "#19e2ff", 2.085, 0.82));
+      const center = makeSprite("#ffffff", 0.072);
+      center.position.copy(latLngToVector3(lat, lng, 2.095));
+      globe.briefGroup.add(center);
+      for (const incident of (state.briefContext?.traffic?.incidents || []).slice(0, 90)) {
+        const marker = makeSprite("#ffb02e", 0.042);
+        marker.position.copy(latLngToVector3(Number(incident.lat), Number(incident.lng), 2.065));
+        globe.briefGroup.add(marker);
+      }
+    }
+    if (state.playbackSample) {
+      for (const item of spatiallyBalancedSample(historyFrameItems(state.playbackSample), 420)) {
+        const marker = makeSprite(colorForType(item.type), 0.034);
+        marker.material.opacity = 0.62;
+        marker.position.copy(latLngToVector3(Number(item.lat), Number(item.lng), item.type === "satellite" ? 2.18 : 2.045));
+        globe.historyGroup.add(marker);
+      }
+    }
+    if (state.globalWeatherOverlay) {
+      for (const point of state.globalWeatherPoints) {
+        const color = weatherTemperatureColor(point.temperatureC);
+        const marker = makeSprite(color, 0.055);
+        marker.position.copy(latLngToVector3(Number(point.lat), Number(point.lng), 2.075));
+        globe.weatherGroup.add(marker);
+        if (Number.isFinite(Number(point.windDirection)) && Number.isFinite(Number(point.windKmh))) {
+          const end = destinationPoint(Number(point.lat), Number(point.lng), Number(point.windDirection), clamp(Number(point.windKmh) * 3, 24, 220));
+          globe.weatherGroup.add(makePathLine([{ lat: point.lat, lng: point.lng }, end], "#dff8ff", 2.08, 0.62));
+        }
+      }
+    }
+  }
+
+  function renderCesiumSpatialContext() {
+    if (!cesiumGlobe.ready || !globalThis.Cesium) return;
+    const Cesium = globalThis.Cesium;
+    cesiumGlobe.briefSource?.entities.removeAll();
+    cesiumGlobe.historySource?.entities.removeAll();
+    cesiumGlobe.incidentSource?.entities.removeAll();
+    cesiumGlobe.weatherGridSource?.entities.removeAll();
+    if (state.briefTarget && cesiumGlobe.briefSource) {
+      const { lat, lng } = state.briefTarget;
+      cesiumGlobe.briefSource.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lng, lat, 500),
+        point: { pixelSize: 13, color: Cesium.Color.WHITE, outlineColor: Cesium.Color.fromCssColorString("#19e2ff"), outlineWidth: 4 },
+        ellipse: {
+          semiMajorAxis: state.briefRadiusKm * 1000,
+          semiMinorAxis: state.briefRadiusKm * 1000,
+          material: Cesium.Color.fromCssColorString("#19e2ff").withAlpha(0.08),
+          outline: true,
+          outlineColor: Cesium.Color.fromCssColorString("#19e2ff").withAlpha(0.88),
+          height: 120,
+        },
+      });
+    }
+    if (cesiumGlobe.incidentSource) {
+      const incidents = uniqueById([
+        ...(state.briefContext?.traffic?.incidents || []),
+        ...(state.globeTrafficOverlay ? state.globeTrafficIncidents : []),
+      ]).slice(0, 180);
+      for (const incident of incidents) {
+        const color = Number(incident.severity || 0) >= 3 ? Cesium.Color.fromCssColorString("#ff4e57") : Cesium.Color.fromCssColorString("#ffb02e");
+        cesiumGlobe.incidentSource.entities.add({
+          id: { oversee: { trafficIncident: incident } },
+          position: Cesium.Cartesian3.fromDegrees(Number(incident.lng), Number(incident.lat), 900),
+          point: { pixelSize: 9, color, outlineColor: Cesium.Color.WHITE.withAlpha(0.82), outlineWidth: 2 },
+        });
+        const line = geometryLinePoints(incident.geometry);
+        if (line.length > 1) {
+          cesiumGlobe.incidentSource.entities.add({ polyline: { positions: cesiumPositions(line, 750), width: 4, material: color.withAlpha(0.9), clampToGround: true } });
+        }
+      }
+    }
+    if (state.playbackSample && cesiumGlobe.historySource) {
+      for (const item of spatiallyBalancedSample(historyFrameItems(state.playbackSample), 520)) {
+        cesiumGlobe.historySource.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(Number(item.lng), Number(item.lat), item.type === "satellite" ? 450000 : item.type === "flight" ? 16000 : 700),
+          point: {
+            pixelSize: item.type === "alert" || item.type === "fire" ? 8 : 6,
+            color: cesiumColor(colorForType(item.type), 0.58),
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.44),
+            outlineWidth: 1,
+          },
+        });
+      }
+    }
+    if (state.globalWeatherOverlay && cesiumGlobe.weatherGridSource) {
+      for (const point of state.globalWeatherPoints) {
+        const color = Cesium.Color.fromCssColorString(weatherTemperatureColor(point.temperatureC));
+        cesiumGlobe.weatherGridSource.entities.add({
+          position: Cesium.Cartesian3.fromDegrees(Number(point.lng), Number(point.lat), 6000),
+          point: {
+            pixelSize: 11,
+            color: color.withAlpha(0.82),
+            outlineColor: Cesium.Color.WHITE.withAlpha(0.86),
+            outlineWidth: 2,
+            scaleByDistance: new Cesium.NearFarScalar(500000, 1.15, 18000000, 0.62),
+          },
+          label: {
+            text: point.temperatureC == null ? "" : `${Math.round(point.temperatureC)} C`,
+            font: "11px IBM Plex Mono",
+            fillColor: Cesium.Color.WHITE,
+            outlineColor: Cesium.Color.BLACK.withAlpha(0.9),
+            outlineWidth: 3,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            pixelOffset: new Cesium.Cartesian2(0, -17),
+            scaleByDistance: new Cesium.NearFarScalar(500000, 1, 10000000, 0.55),
+            translucencyByDistance: new Cesium.NearFarScalar(500000, 1, 16000000, 0.25),
+          },
+        });
+        if (Number.isFinite(Number(point.windDirection)) && Number.isFinite(Number(point.windKmh))) {
+          const end = destinationPoint(Number(point.lat), Number(point.lng), Number(point.windDirection), clamp(Number(point.windKmh) * 3, 24, 220));
+          cesiumGlobe.weatherGridSource.entities.add({ polyline: { positions: cesiumPositions([{ lat: point.lat, lng: point.lng }, end], 5500), width: 2, material: Cesium.Color.WHITE.withAlpha(0.7), arcType: Cesium.ArcType.GEODESIC } });
+        }
+      }
+    }
+    cesiumGlobe.viewer.scene.requestRender();
+  }
+
+  function renderBriefOnFlatMap() {
+    if (!state.cameraMap || !state.briefMapLayer || !globalThis.L) return;
+    state.briefMapLayer.clearLayers();
+    if (state.briefTarget) {
+      globalThis.L.circle([state.briefTarget.lat, state.briefTarget.lng], {
+        radius: state.briefRadiusKm * 1000,
+        color: "#19e2ff",
+        fillColor: "#19e2ff",
+        fillOpacity: 0.06,
+        weight: 2,
+        interactive: false,
+      }).addTo(state.briefMapLayer);
+      globalThis.L.circleMarker([state.briefTarget.lat, state.briefTarget.lng], {
+        radius: 7,
+        color: "#ffffff",
+        fillColor: "#19e2ff",
+        fillOpacity: 0.92,
+        weight: 2,
+        interactive: false,
+      }).addTo(state.briefMapLayer);
+      for (const incident of (state.briefContext?.traffic?.incidents || []).slice(0, 120)) {
+        const color = Number(incident.severity || 0) >= 3 ? "#ff4e57" : "#ffb02e";
+        const line = geometryLinePoints(incident.geometry);
+        if (line.length > 1) globalThis.L.polyline(line.map((point) => [point.lat, point.lng]), { color, weight: 4, opacity: 0.82, interactive: false }).addTo(state.briefMapLayer);
+        globalThis.L.circleMarker([incident.lat, incident.lng], { radius: 5, color: "#fff", fillColor: color, fillOpacity: 0.9, weight: 1, interactive: false }).addTo(state.briefMapLayer);
+      }
+    }
+    if (state.playbackSample) {
+      for (const item of spatiallyBalancedSample(historyFrameItems(state.playbackSample), 420)) {
+        globalThis.L.circleMarker([item.lat, item.lng], { radius: 3, color: "#fff", fillColor: colorForType(item.type), fillOpacity: 0.5, weight: 1, interactive: false }).addTo(state.briefMapLayer);
+      }
+    }
+  }
+
+  function geometryLinePoints(geometry) {
+    if (!geometry || !Array.isArray(geometry.coordinates)) return [];
+    if (geometry.type === "LineString") return geometry.coordinates.map(([lng, lat]) => ({ lat: Number(lat), lng: Number(lng) })).filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+    if (geometry.type === "MultiLineString") return (geometry.coordinates[0] || []).map(([lng, lat]) => ({ lat: Number(lat), lng: Number(lng) })).filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lng));
+    return [];
+  }
+
+  function weatherTemperatureColor(value) {
+    const temperature = Number(value);
+    if (!Number.isFinite(temperature)) return "#9fb9c9";
+    if (temperature <= -15) return "#7b6cff";
+    if (temperature <= 0) return "#3aa9ff";
+    if (temperature <= 12) return "#19e2ff";
+    if (temperature <= 24) return "#31e58f";
+    if (temperature <= 34) return "#ffb02e";
+    return "#ff4e57";
   }
 
   function renderCesiumLayers(options = {}) {
@@ -2398,6 +3377,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     if (state.layers.vessels) addCesiumMarkers("vessels", filterByQuery(snapshot.vessels || []), "vessel");
     if (state.layers.launches) addCesiumMarkers("launches", filterByQuery(snapshot.launches || []), "launch");
     if (state.layers.radio) addCesiumMarkers("radio", filterByQuery(snapshot.radio || []), "radio");
+    renderCesiumSpatialContext();
     renderCesiumSelection();
     cesiumGlobe.viewer?.scene?.requestRender?.();
     const cameraPoints = cesiumGlobe.pointLayers.cameras;
@@ -2857,7 +3837,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   }
 
   function onGlobeClick(event) {
-    if (globe.dragging || !globe.raycaster || !globe.pickables.length) return;
+    if (globe.dragging || !globe.raycaster) return;
     const rect = els.globeCanvas.getBoundingClientRect();
     globe.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     globe.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -2866,6 +3846,14 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     if (hit?.object?.userData?.item) {
       const { type, item } = hit.object.userData;
       selectObject(type, displayItemForGlobe(type, item), { focus: false });
+      return;
+    }
+    if (state.briefPickMode && globe.earth) {
+      const earthHit = globe.raycaster.intersectObject(globe.earth, false)[0];
+      if (!earthHit?.point) return;
+      const local = globe.worldGroup.worldToLocal(earthHit.point.clone());
+      const point = vector3ToLatLng(local);
+      setBriefTarget(point.lat, point.lng, "Picked globe location");
     }
   }
 
@@ -3035,19 +4023,29 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     state.cameraMap.getPane("trafficMotionPane").style.zIndex = "360";
     state.cameraMap.getPane("trafficMotionPane").style.pointerEvents = "none";
     state.trafficMapRenderer = globalThis.L.svg({ pane: "trafficMotionPane", padding: 0.5 });
+    state.cameraMap.createPane("weatherContextPane");
+    state.cameraMap.getPane("weatherContextPane").style.zIndex = "330";
+    state.cameraMap.getPane("weatherContextPane").style.pointerEvents = "none";
     globalThis.L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>',
     }).addTo(state.cameraMap);
     state.cameraLayer = globalThis.L.layerGroup().addTo(state.cameraMap);
+    state.briefMapLayer = globalThis.L.layerGroup().addTo(state.cameraMap);
+    state.mapWeatherLayer = globalThis.L.layerGroup().addTo(state.cameraMap);
     state.cameraMap.on("moveend zoomend", () => {
       if (state.suppressMapMove) return;
       state.mapListMode = true;
       state.catalogLimit = 120;
       renderCatalog();
       scheduleMapTrafficRefresh();
+      scheduleMapWeatherRefresh();
     });
-    state.cameraMap.on("click", () => {
+    state.cameraMap.on("click", (event) => {
+      if (state.briefPickMode) {
+        setBriefTarget(event.latlng.lat, event.latlng.lng, "Picked map location");
+        return;
+      }
       state.mapListMode = true;
       state.catalogLimit = 120;
       renderCatalog();
@@ -3070,6 +4068,62 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       state.radarLayer.removeFrom(state.cameraMap);
     }
     els.toggleRadarOverlay.classList.toggle("active", state.radarOverlay);
+  }
+
+  async function toggleMapGlobalWeatherOverlay() {
+    state.mapGlobalWeatherOverlay = !state.mapGlobalWeatherOverlay;
+    els.toggleGlobalWeatherMap.classList.toggle("active", state.mapGlobalWeatherOverlay);
+    if (!state.mapGlobalWeatherOverlay) {
+      state.mapWeatherPoints = [];
+      state.mapWeatherLayer?.clearLayers();
+      return;
+    }
+    await refreshMapGlobalWeather();
+  }
+
+  function scheduleMapWeatherRefresh() {
+    if (!state.mapGlobalWeatherOverlay) return;
+    window.clearTimeout(state.mapWeatherRefreshTimer);
+    state.mapWeatherRefreshTimer = window.setTimeout(refreshMapGlobalWeather, 650);
+  }
+
+  async function refreshMapGlobalWeather() {
+    if (!state.mapGlobalWeatherOverlay || !state.cameraMap) return;
+    const token = ++state.mapWeatherRequestToken;
+    const bounds = state.cameraMap.getBounds();
+    const bbox = `${bounds.getWest()},${clamp(bounds.getSouth(), -75, 75)},${bounds.getEast()},${clamp(bounds.getNorth(), -75, 75)}`;
+    try {
+      const response = await fetch(`/api/weather/grid?bbox=${encodeURIComponent(bbox)}&points=42&ts=${Date.now()}`);
+      if (!response.ok) throw new Error(`Weather grid failed with status ${response.status}`);
+      const payload = await response.json();
+      if (token !== state.mapWeatherRequestToken) return;
+      state.mapWeatherPoints = payload.points || [];
+      renderMapWeatherPoints();
+    } catch {
+      if (token !== state.mapWeatherRequestToken) return;
+      state.mapWeatherPoints = [];
+      renderMapWeatherPoints();
+    }
+  }
+
+  function renderMapWeatherPoints() {
+    if (!state.mapWeatherLayer || !globalThis.L) return;
+    state.mapWeatherLayer.clearLayers();
+    if (!state.mapGlobalWeatherOverlay) return;
+    for (const point of state.mapWeatherPoints) {
+      const color = weatherTemperatureColor(point.temperatureC);
+      const marker = globalThis.L.circleMarker([point.lat, point.lng], {
+        pane: "weatherContextPane",
+        radius: 8,
+        color: "rgba(255,255,255,0.75)",
+        fillColor: color,
+        fillOpacity: 0.78,
+        weight: 1,
+        interactive: false,
+      });
+      marker.bindTooltip(`${point.temperatureC == null ? "--" : `${Math.round(point.temperatureC)} C`} | Wind ${point.windKmh == null ? "--" : `${Math.round(point.windKmh)} km/h`} | ${weatherCodeLabel(point.weatherCode)}`, { permanent: false, direction: "top" });
+      marker.addTo(state.mapWeatherLayer);
+    }
   }
 
   function createFemaFloodLeafletLayer() {
@@ -3152,12 +4206,17 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const requestToken = ++state.trafficMapRequestToken;
     setTrafficStatusChip(els.cameraTrafficStatus, "Loading roads", { state: "loading" });
     try {
-      const response = await fetch(`/api/traffic/roads?bbox=${encodeURIComponent(view.bbox)}&detail=${view.detail}&ts=${Date.now()}`);
+      const [response, incidentPayload] = await Promise.all([
+        fetch(`/api/traffic/roads?bbox=${encodeURIComponent(view.bbox)}&detail=${view.detail}&ts=${Date.now()}`),
+        fetchTrafficIncidentsForView(view, status),
+      ]);
       const payload = await response.json();
       if (!response.ok || !payload.ok) throw new Error(payload.message || payload.error || `Road query failed with ${response.status}`);
       if (requestToken !== state.trafficMapRequestToken || !state.mapTrafficOverlay) return;
+      state.mapTrafficIncidents = incidentPayload.incidents;
       renderMapTrafficRoads(payload.roads, status.mode);
-      renderTrafficModeStatus(els.cameraTrafficStatus, status, payload.roads.length ? "" : "No mapped major roads in view");
+      renderMapTrafficIncidents();
+      renderTrafficModeStatus(els.cameraTrafficStatus, status, payload.roads.length ? "" : "No mapped major roads in view", state.mapTrafficIncidents.length);
       if (status.mode === "live") {
         window.setTimeout(async () => {
           if (!state.mapTrafficOverlay) return;
@@ -3168,6 +4227,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     } catch (error) {
       if (requestToken !== state.trafficMapRequestToken) return;
       state.trafficMapRoadLayer?.clearLayers();
+      state.mapTrafficIncidents = [];
+      state.trafficMapIncidentLayer?.clearLayers();
       if (status.mode === "live" && state.trafficMapTileLayer) {
         renderTrafficModeStatus(els.cameraTrafficStatus, status);
         els.cameraTrafficStatus.title = `${status.detail || ""} Road animation unavailable: ${error.message}`.trim();
@@ -3194,6 +4255,28 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       detail,
       bbox: [west, south, east, north].map((value) => value.toFixed(5)).join(","),
     };
+  }
+
+  async function fetchTrafficIncidentsForView(view, status) {
+    if (status?.mode !== "live") return { incidents: [] };
+    const bbox = localTrafficIncidentBbox(view?.bbox);
+    if (!bbox) return { incidents: [] };
+    try {
+      const response = await fetch(`/api/traffic/incidents?bbox=${encodeURIComponent(bbox)}&ts=${Date.now()}`);
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) return { incidents: [] };
+      return { incidents: Array.isArray(payload.incidents) ? payload.incidents : [] };
+    } catch {
+      return { incidents: [] };
+    }
+  }
+
+  function localTrafficIncidentBbox(value) {
+    const coordinates = String(value || "").split(",").map(Number);
+    if (coordinates.length !== 4 || coordinates.some((coordinate) => !Number.isFinite(coordinate))) return "";
+    const [west, south, east, north] = coordinates;
+    if (east <= west || north <= south || east - west > 1.18 || north - south > 1.18) return "";
+    return coordinates.map((coordinate) => coordinate.toFixed(4)).join(",");
   }
 
   function ensureMapTrafficTileLayer() {
@@ -3249,11 +4332,42 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     }
   }
 
+  function renderMapTrafficIncidents() {
+    if (!state.cameraMap || !globalThis.L) return;
+    if (!state.trafficMapIncidentLayer) state.trafficMapIncidentLayer = globalThis.L.layerGroup().addTo(state.cameraMap);
+    state.trafficMapIncidentLayer.clearLayers();
+    for (const incident of state.mapTrafficIncidents.slice(0, 160)) {
+      const color = Number(incident.severity || 0) >= 3 ? "#ff4e57" : "#ffb02e";
+      const line = geometryLinePoints(incident.geometry);
+      if (line.length > 1) {
+        globalThis.L.polyline(line.map((point) => [point.lat, point.lng]), {
+          pane: "trafficMotionPane",
+          color,
+          weight: 5,
+          opacity: 0.88,
+        }).addTo(state.trafficMapIncidentLayer);
+      }
+      globalThis.L.circleMarker([incident.lat, incident.lng], {
+        pane: "markerPane",
+        radius: 6,
+        color: "#ffffff",
+        fillColor: color,
+        fillOpacity: 0.94,
+        weight: 2,
+      })
+        .bindTooltip(`${escapeHtml(incident.description || "Traffic incident")}${incident.delaySeconds ? ` | ${Math.round(incident.delaySeconds / 60)} min delay` : ""}`)
+        .on("click", () => setBriefTarget(Number(incident.lat), Number(incident.lng), incident.description || "Traffic incident"))
+        .addTo(state.trafficMapIncidentLayer);
+    }
+  }
+
   function clearMapTrafficOverlay() {
     window.clearTimeout(state.trafficMapRefreshTimer);
     state.trafficMapRequestToken += 1;
+    state.mapTrafficIncidents = [];
     removeMapTrafficTileLayer();
     state.trafficMapRoadLayer?.clearLayers();
+    state.trafficMapIncidentLayer?.clearLayers();
   }
 
   function renderCameraMap(options = {}) {
@@ -3360,6 +4474,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const nearestCameraAction = type !== "camera" && Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))
       ? `<button class="text-button" style="color:var(--cyan)" type="button" data-nearest-camera data-nearest-type="${type}" data-nearest-id="${escapeHtml(item.id)}"><i data-lucide="cctv"></i>Nearest Camera</button>`
       : "";
+    const briefAction = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))
+      ? `<button class="text-button" style="color:var(--cyan)" type="button" data-area-brief data-brief-type="${type}" data-brief-id="${escapeHtml(item.id)}"><i data-lucide="scan-search"></i>Area Brief</button>`
+      : "";
     els.selectionCard.innerHTML = `<button class="selection-close" type="button" data-close-selection aria-label="Close selection card">
         <i data-lucide="x"></i>
       </button>
@@ -3369,6 +4486,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         ${primaryAction}
         ${focusAction}
         ${nearestCameraAction}
+        ${briefAction}
         <button class="text-button" style="color:${pinned ? "var(--green)" : color}" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">
           <i data-lucide="${pinned ? "bookmark-check" : "bookmark"}"></i>${pinned ? "Pinned" : "Pin"}
         </button>
@@ -3422,6 +4540,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   function buildWatchActions(type, item) {
     const actions = [];
     actions.push(`<button class="text-button" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">Center</button>`);
+    if (Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))) actions.push(`<button class="text-button" type="button" data-area-brief data-brief-type="${type}" data-brief-id="${escapeHtml(item.id)}">Area Brief</button>`);
     actions.push(`<button class="text-button" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">${isPinned(type, item.id) ? "Pinned" : "Pin"}</button>`);
     if (type === "camera") actions.push(`<button class="text-button" type="button" data-select-type="camera" data-select-id="${escapeHtml(item.id)}">Refresh</button>`);
     if (item.sourcePageUrl || item.sourceUrl || item.officialUrl || item.url) {
@@ -3445,7 +4564,11 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         ${note}
       </div>`;
       const image = els.watchView.querySelector("img[data-direct-src]");
-      image?.addEventListener("error", () => showImageError(view));
+      image?.addEventListener("load", () => reportSelectedCameraHealth(true, "image"), { once: true });
+      image?.addEventListener("error", () => {
+        reportSelectedCameraHealth(false, "image", "Public still image did not load");
+        showImageError(view);
+      });
       scheduleStillRefresh(view);
     } else if (view.type === "iframe") {
       els.watchView.innerHTML = `<div class="media-frame">
@@ -3464,13 +4587,21 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         state.hls = new globalThis.Hls({ lowLatencyMode: true });
         state.hls.loadSource(view.url);
         state.hls.attachMedia(video);
+        state.hls.on(globalThis.Hls.Events.MANIFEST_PARSED, () => reportSelectedCameraHealth(true, "hls"));
         state.hls.on(globalThis.Hls.Events.ERROR, (_event, data) => {
-          if (data?.fatal) showVideoError(data.details || "The HLS stream stopped responding.");
+          if (data?.fatal) {
+            reportSelectedCameraHealth(false, "hls", data.details || "HLS stream stopped responding");
+            showVideoError(data.details || "The HLS stream stopped responding.");
+          }
         });
       } else {
         video.src = view.url;
       }
-      video.addEventListener("error", () => showVideoError("The browser could not play this video stream."));
+      video.addEventListener("playing", () => reportSelectedCameraHealth(true, view.type), { once: true });
+      video.addEventListener("error", () => {
+        reportSelectedCameraHealth(false, view.type, "Browser could not play this video stream");
+        showVideoError("The browser could not play this video stream.");
+      });
     } else {
       els.watchView.innerHTML = `<div class="watch-placeholder"><i data-lucide="circle-off"></i><span>${escapeHtml(view.note || "Viewer unavailable")}</span></div>`;
     }
@@ -3523,6 +4654,16 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     }
   }
 
+  function reportSelectedCameraHealth(ok, mediaType, message = "") {
+    const id = state.selection?.type === "camera" ? state.selection.id : "";
+    if (!id) return;
+    fetch("/api/camera-health", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, ok: Boolean(ok), mediaType, message }),
+    }).catch(() => {});
+  }
+
   function showImageError(view) {
     const frame = els.watchView.querySelector(".media-frame");
     if (!frame || frame.querySelector(".media-error")) return;
@@ -3556,7 +4697,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     if (type === "alert") {
       els.watchView.innerHTML = `<div class="alert-watch" style="border-color:${color}">
         <div>
-          <span class="media-badge live">NWS Alert</span>
+          <span class="media-badge live">${escapeHtml(alertSourceLabel(item))}</span>
           <h3>${escapeHtml(item.event || item.title || "Weather alert")}</h3>
           <p>${escapeHtml(item.areaSummary || item.region || "Unknown affected area")}</p>
         </div>
@@ -3741,7 +4882,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   }
 
   function shouldHideUnavailableCamera(camera) {
-    return !state.includeDownStreams && (camera.capability === "candidate" || state.downStreamIds.has(camera.id));
+    return !state.includeDownStreams && (camera.capability === "candidate" || camera.healthStatus === "down" || state.downStreamIds.has(camera.id));
   }
 
   function chooseDefaultCamera(cameras = state.snapshot?.cameras || []) {
@@ -3770,7 +4911,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   }
 
   function cameraStatusLabel(camera) {
-    if (state.downStreamIds.has(camera.id)) return "down";
+    if (state.downStreamIds.has(camera.id) || camera.healthStatus === "down") return "down";
+    if (camera.healthStatus === "verified") return camera.capability === "player" || camera.capability === "stream" ? "verified live" : "verified";
     if (camera.capability === "candidate") return "unverified";
     if (camera.capability === "player" || camera.capability === "stream") return "live";
     return camera.category || "camera";
@@ -4169,12 +5311,21 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     if (type === "quake") return `M${item.magnitude?.toFixed?.(1) || "?"} | ${item.location || "USGS event"}`;
     if (type === "fire" && (item.subtype === "incident" || item.subtype === "perimeter")) return `${item.subtype === "perimeter" ? "Perimeter" : "Incident"} | ${item.acres ? `${formatNumber(Math.round(item.acres))} acres` : item.gacc || "WildFireSA"} | ${item.source || "EGP"}`;
     if (type === "fire") return `${item.instrument || "VIIRS"} | FRP ${Math.round(item.frp || 0)} | ${item.confidence || "unknown"} confidence`;
-    if (type === "alert") return `${item.event || "Alert"} | ${item.areaSummary || item.region || item.area || "NWS"}`;
+    if (type === "alert") return `${item.event || "Alert"} | ${item.areaSummary || item.region || item.area || "Area unavailable"} | ${alertSourceLabel(item)}`;
     if (type === "demographic") return `${item.populationLabel || formatNumber(item.population || 0)} people | ${item.source || "U.S. Census Population Estimates"}`;
     if (type === "vessel") return `${item.vesselType || "Vessel"} | ${item.speedKnots != null ? `${Number(item.speedKnots).toFixed(1)} kn` : "speed unknown"} | AISStream`;
     if (type === "launch") return `${item.status || "Mission"} | ${item.rocket || item.agency || "Launch Library 2"} | ${item.net ? formatShortTime(item.net) : "time TBD"}`;
     if (type === "radio") return `${item.region || item.country || "Global"} | ${item.language || item.codec || "Public radio"}`;
     return item.source || "Public signal";
+  }
+
+  function alertSourceLabel(item) {
+    const source = String(item?.source || "").trim();
+    if (/gdacs/i.test(source)) return "GDACS global disaster";
+    if (/nhc|hurricane/i.test(source)) return "NHC tropical advisory";
+    if (/nws|weather service/i.test(source) || !source) return "NWS official alert";
+    if (/gdelt/i.test(source)) return "Media context signal";
+    return source;
   }
 
   function infoSummary(type, item) {

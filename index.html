@@ -121,9 +121,15 @@
                 <strong id="alertDrawerCount">0</strong>
               </button>
               <button class="weather-overlay-toggle" type="button" id="toggleGlobeWeather" aria-pressed="false">
-                <i data-lucide="cloud-rain"></i>
-                <span>NOAA Radar</span>
+                <i data-lucide="cloud-sun"></i>
+                <span>Weather</span>
               </button>
+              <div class="weather-palette" id="weatherPalette" aria-hidden="true">
+                <span class="kicker">Weather Layers</span>
+                <button class="segment" type="button" id="toggleGlobalWeather" aria-pressed="false">Global Conditions</button>
+                <button class="segment" type="button" id="toggleWeatherRadar" aria-pressed="false">NOAA Radar (US)</button>
+                <small id="weatherGridStatus">Off</small>
+              </div>
               <button class="flood-overlay-toggle" type="button" id="toggleGlobeFlood" aria-pressed="false">
                 <i data-lucide="waves"></i>
                 <span>FEMA Flood</span>
@@ -134,6 +140,7 @@
               </button>
               <span class="traffic-status-chip globe-traffic-status" id="globeTrafficStatus" role="status" aria-live="polite" hidden></span>
               <div class="stage-jump-bar" aria-label="Quick navigation">
+                <button class="text-button" type="button" id="openBriefDrawer"><i data-lucide="scan-search"></i>Area brief</button>
                 <button class="text-button" type="button" data-view-jump="camera-browser">Watch feeds</button>
                 <button class="text-button" type="button" data-view-jump="map">Globe</button>
               </div>
@@ -164,6 +171,45 @@
                   <button class="text-button" type="button" id="closeAlertDrawer">Close</button>
                 </div>
                 <div class="event-list alert-drawer-list" id="alertDrawerList"></div>
+              </aside>
+              <aside class="brief-drawer" id="briefDrawer" aria-hidden="true">
+                <div class="drawer-head compact">
+                  <div>
+                    <span class="kicker">Location Intelligence</span>
+                    <h2 id="briefTitle">Area Brief</h2>
+                    <p id="briefSubtitle">Inspect the globe center or select any mapped signal.</p>
+                  </div>
+                  <button class="icon-button" type="button" id="closeBriefDrawer" title="Close area brief">
+                    <i data-lucide="x"></i>
+                  </button>
+                </div>
+                <div class="brief-controls">
+                  <div class="segmented-control compact" id="briefRadiusControls" aria-label="Area radius">
+                    <button class="segment" type="button" data-brief-radius="25">25 km</button>
+                    <button class="segment active" type="button" data-brief-radius="100">100 km</button>
+                    <button class="segment" type="button" data-brief-radius="250">250 km</button>
+                  </div>
+                  <button class="text-button" type="button" id="pickBriefLocation"><i data-lucide="mouse-pointer-2"></i>Pick point</button>
+                  <button class="text-button" type="button" id="saveWatchZone"><i data-lucide="radar"></i>Watch area</button>
+                </div>
+                <nav class="brief-tabs" id="briefTabs" aria-label="Area brief sections">
+                  <button class="active" type="button" data-brief-tab="overview">Overview</button>
+                  <button type="button" data-brief-tab="watches">Watches <strong id="watchZoneBadge">0</strong></button>
+                  <button type="button" data-brief-tab="history">History</button>
+                </nav>
+                <div class="brief-pane active" id="briefOverview"></div>
+                <div class="brief-pane" id="briefWatches"></div>
+                <div class="brief-pane" id="briefHistory">
+                  <div class="history-controls">
+                    <label for="historyRange">Recorded operating picture</label>
+                    <input id="historyRange" type="range" min="0" max="0" value="0" step="1" disabled />
+                    <div>
+                      <strong id="historyTime">No local history yet</strong>
+                      <button class="text-button" type="button" id="historyLive" disabled>Return live</button>
+                    </div>
+                  </div>
+                  <div id="historySummary" class="brief-card"></div>
+                </div>
               </aside>
             </div>
           </section>
@@ -248,8 +294,10 @@
             <div class="map-overlay-row">
               <span>Map overlays</span>
               <button class="segment" type="button" id="toggleRadarOverlay">NOAA Radar</button>
+              <button class="segment" type="button" id="toggleGlobalWeatherMap">Global Weather</button>
               <button class="segment" type="button" id="toggleFloodOverlay">FEMA Flood</button>
               <button class="segment" type="button" id="toggleTrafficOverlay" aria-pressed="false" title="Road traffic: modeled without a key, live congestion colors with a TomTom key">Road Traffic</button>
+              <button class="segment" type="button" id="pickBriefOnMap">Area Brief</button>
               <span class="traffic-status-chip" id="cameraTrafficStatus" role="status" aria-live="polite" hidden></span>
               <label class="map-dot-toggle">
                 <input id="showCameraMapMarkers" type="checkbox" checked />
@@ -373,10 +421,11 @@
               <i data-lucide="x"></i>
             </button>
           </div>
+          <div class="source-health-overview" id="sourceHealthSummary"></div>
           <div class="source-grid" id="sourceGrid"></div>
           <div class="future-stack">
             <h3>Paid Later</h3>
-            <p>Photorealistic 3D tiles, commercial ADS-B, AIS maritime feeds, high-resolution imagery, and archived playback storage.</p>
+            <p>Photorealistic 3D tiles, commercial ADS-B, higher-quota maritime feeds, high-resolution imagery, cloud-synced watch zones, and longer multi-device archives.</p>
           </div>
         </section>
 
@@ -392,8 +441,43 @@
           </div>
           <form class="settings-form" id="settingsForm">
             <div class="settings-grid" id="settingsGrid"></div>
+            <section class="custom-camera-manager">
+              <div class="section-head">
+                <div>
+                  <h3>Personal Camera Catalog</h3>
+                  <p>Add a legitimate public still, stream, or player without editing the application. Private-network and unsupported URLs remain blocked.</p>
+                </div>
+              </div>
+              <div class="custom-camera-form">
+                <input id="customCameraName" type="text" maxlength="140" placeholder="Camera name" />
+                <input id="customCameraArea" type="text" maxlength="100" placeholder="City / area" />
+                <input id="customCameraCountry" type="text" maxlength="80" placeholder="Country" />
+                <input id="customCameraLat" type="number" min="-85" max="85" step="any" placeholder="Latitude" />
+                <input id="customCameraLng" type="number" min="-180" max="180" step="any" placeholder="Longitude" />
+                <select id="customCameraType" aria-label="Camera media type">
+                  <option value="image">Refreshed still image</option>
+                  <option value="hls">HLS live stream</option>
+                  <option value="video">Direct video</option>
+                  <option value="iframe">Embedded public player</option>
+                  <option value="page">Source page only</option>
+                </select>
+                <input id="customCameraMediaUrl" type="url" placeholder="Public media URL" />
+                <input id="customCameraSourceUrl" type="url" placeholder="Official source page (optional)" />
+                <button class="text-button" type="button" id="addCustomCamera"><i data-lucide="map-pin-plus"></i>Add Camera</button>
+              </div>
+              <div class="custom-camera-list" id="customCameraList"></div>
+            </section>
+            <details class="privacy-card">
+              <summary>Local data, privacy, and limitations</summary>
+              <p>API keys and personal camera entries stay in Oversee's local application-data folder. Keys are sent only from the local server to the provider they unlock and are excluded from diagnostic exports.</p>
+              <p>Map signals come from best-effort public sources and can be delayed, cached, incomplete, or unavailable. Use each official source link before making an important decision.</p>
+            </details>
             <div class="settings-actions">
               <button class="text-button" type="submit">Save Settings</button>
+              <button class="text-button" type="button" id="recheckCameras"><i data-lucide="camera"></i>Recheck Cameras</button>
+              <button class="text-button" type="button" id="checkForUpdates"><i data-lucide="package-check"></i>Check for Updates</button>
+              <button class="text-button" type="button" id="downloadDiagnostics"><i data-lucide="file-down"></i>Export Diagnostics</button>
+              <button class="text-button" type="button" id="openOnboarding"><i data-lucide="circle-help"></i>Quick Tour</button>
               <button class="text-button" type="button" id="openSourcePanel">
                 <i data-lucide="radio-tower"></i>
                 Free Data Stack
@@ -401,6 +485,27 @@
               <span id="settingsStatus">Keys are masked after saving.</span>
             </div>
           </form>
+        </section>
+
+        <section class="insight-modal" id="onboardingModal" aria-hidden="true">
+          <div class="modal-backdrop" data-close-modal></div>
+          <article class="modal-card onboarding-card">
+            <div class="section-head">
+              <div>
+                <span class="kicker">Welcome to Oversee</span>
+                <h2>One globe, many public sources</h2>
+                <p>Use layers for the operating picture, Area Brief for local context, and Watches for meaningful changes.</p>
+              </div>
+              <button class="icon-button" type="button" data-close-modal title="Close"><i data-lucide="x"></i></button>
+            </div>
+            <div class="onboarding-grid">
+              <article><i data-lucide="globe-2"></i><h3>Explore</h3><p>Click signals for details. Use Area Brief to inspect a radius without crowding the globe.</p></article>
+              <article><i data-lucide="radar"></i><h3>Watch</h3><p>Save important places and Oversee will identify newly observed hazards and moving assets nearby.</p></article>
+              <article><i data-lucide="history"></i><h3>Replay</h3><p>History is retained locally so you can compare earlier operating pictures after restarting the app.</p></article>
+              <article><i data-lucide="badge-info"></i><h3>Verify</h3><p>Every layer is best-effort public data. Check freshness and open the official source before acting.</p></article>
+            </div>
+            <button class="text-button onboarding-finish" type="button" data-close-modal>Start exploring</button>
+          </article>
         </section>
       </main>
     </div>

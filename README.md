@@ -4,7 +4,7 @@ Free-source global situational-awareness desktop app.
 
 ## What It Does
 
-Oversee is a local-first operations console that fuses public geospatial data without pretending that best-effort sources are authoritative or always online. Version 3 adds a modular frontend, source-health reporting, scalable globe rendering, and optional data layers that stay out of the way until enabled.
+Oversee is a local-first operations console that fuses public geospatial data without pretending that best-effort sources are authoritative or always online. Version 3.2 adds area briefs, watched regions, bounded history playback, broader weather and disaster context, camera health checks, and release-quality diagnostics without crowding the primary globe.
 
 - Global camera inventory with official public adapters across the US, Canada, Europe, Asia, Australia, New Zealand, and Puerto Rico
 - Cesium and lightweight operations globes with selectable cameras, satellites, flights, earthquakes, fires, alerts, population, vessels, missions, and radio
@@ -15,6 +15,10 @@ Oversee is a local-first operations console that fuses public geospatial data wi
 - EGP WildFireSA incidents, WFIGS perimeters, NWS alerts, and NHC tropical systems
 - NOAA radar and FEMA flood overlays for weather and hazard context
 - City-scale road traffic on both maps: an explicitly modeled OpenStreetMap motion layer by default, with optional TomTom real-time congestion colors
+- Live TomTom incidents and closures in local map views and Area Briefs when a user key is configured
+- Area Briefs with 25/100/250 km summaries, nearby hazards/cameras/assets, local weather, aviation weather, and optional OpenAQ monitor readings
+- Persistent watched areas with change detection, subtle notifications, and a bounded local history playback trail
+- Global Open-Meteo conditions, GDACS disasters, Aviation Weather Center observations/advisories, and NOAA space-weather context
 - Census Population Estimates for state-level population context
 - Optional no-key launch missions from Launch Library 2 and public stations from Radio Browser
 - Optional live AIS vessel positions when the user supplies an AISStream key
@@ -24,7 +28,7 @@ Oversee is a local-first operations console that fuses public geospatial data wi
 
 ## Free Now, Paid Later
 
-The default experience intentionally uses free public sources. User-supplied keys can unlock NASA FIRMS, TomTom live traffic flow, AISStream, keyed transportation catalogs, Cesium ion, Google 3D Tiles, and higher-quota flight services without putting credentials in the repository.
+The default experience intentionally uses free public sources. User-supplied keys can unlock NASA FIRMS, TomTom live traffic, OpenAQ monitor readings, AISStream, and keyed transportation catalogs without putting credentials in the repository. Future integrations are not shown as active settings until they actually power a feature.
 
 ## Run Locally
 
@@ -55,6 +59,7 @@ Development commands:
 npm run dev
 npm test
 npm run build
+npm run check
 ```
 
 ## Windows Desktop App
@@ -102,6 +107,8 @@ npm install
 npm run desktop:build -- --bundles dmg
 ```
 
+Tagged workflow runs publish Windows and macOS installers plus SHA-256 checksum files to a GitHub release. Builds remain unsigned unless platform signing and Apple notarization credentials are configured; see [docs/release-signing.md](./docs/release-signing.md).
+
 ## Data Notes
 
 Satellite positions and tracks are propagated from public two-line elements with `satellite.js`/SGP4. They are suitable for visualization and broad situational context, not navigation, conjunction analysis, or precision orbital work.
@@ -117,3 +124,5 @@ The main public-signal snapshot refreshes every 60 seconds. Rate-sensitive aircr
 Oversee keeps a local runtime cache for public API results under the user's local app data folder. If an upstream source is temporarily down after a successful previous fetch, the dashboard can keep showing a clearly labeled stale cache instead of dropping the layer entirely.
 
 All feeds remain subject to their originating agency's availability, terms, licensing, delay, and accuracy. Use the source links and official instructions before acting on important information.
+
+See [docs/privacy-and-data.md](./docs/privacy-and-data.md) for local storage, API-key, and network-request details.
