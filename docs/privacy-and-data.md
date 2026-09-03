@@ -8,7 +8,9 @@ The local adapter requests public camera catalogs, media, maps, weather, alerts,
 
 ## API Keys
 
-Optional keys entered in Settings are stored in the current user's local Oversee configuration as plain text. They are sent only from the local adapter to the corresponding provider. They are masked in the UI, omitted from diagnostic exports, and are not included in Git commits.
+Optional keys entered in Settings are stored in the current user's local Oversee configuration as plain text. Most credentials are sent only from the local adapter to the corresponding provider. Cesium ion and Google Photorealistic 3D Tiles require browser-side credentials, so those two values are delivered to Oversee's local interface and sent by Cesium to the applicable tile provider. Restrict those credentials to the required API and allowed application origins in the provider console.
+
+All keys are masked in the UI, omitted from diagnostic exports, and excluded from Git commits. The local globe-configuration response is same-origin only and marked `no-store`, but another process with access to the computer should still be treated as capable of reading local application data.
 
 Do not paste a credential you are not permitted to use. Rotate a key through its provider if the computer or configuration file is compromised.
 

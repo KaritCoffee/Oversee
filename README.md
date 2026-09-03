@@ -4,11 +4,13 @@ Free-source global situational-awareness desktop app.
 
 ## What It Does
 
-Oversee is a local-first operations console that fuses public geospatial data without pretending that best-effort sources are authoritative or always online. Version 3.3 expands the official no-key camera inventory and adds spatial deduplication, coverage balancing, scored media health, and automatic fallback selection.
+Oversee is a local-first operations console that fuses public geospatial data without pretending that best-effort sources are authoritative or always online. Version 3.5 adds compact layer presets, a ranked Incident View, camera coverage diagnostics, stricter position validation, and hardened release/update handling while retaining the optional streamed 3D city/terrain providers and focused aircraft views from 3.4.
 
 - Global camera inventory with official public adapters across the US, Canada, Europe, Asia, Australia, New Zealand, and Puerto Rico
-- No-key camera catalogs from Taiwan, BayernInfo, Vancouver, 511SC, 511NY, Idaho 511, New England 511, Atlantic Canada 511, Estonia, Iceland, and other public agencies
+- No-key camera catalogs from Taiwan, BayernInfo, Vancouver, 511SC, 511NY, Idaho 511, New England 511, Nevada Roads, Utah UDOT, Alaska 511, Wisconsin 511, Louisiana 511, Estonia, Iceland, and other public agencies
 - Cesium and lightweight operations globes with selectable cameras, satellites, flights, earthquakes, fires, alerts, population, vessels, missions, and radio
+- Standard keyless globe plus optional Cesium World Terrain/OpenStreetMap Buildings and Google Photorealistic 3D Tiles quality modes
+- Follow, chase, and simulated cockpit aircraft cameras with compact telemetry, local aircraft models, freshness labels, and targeted 20-second position checks
 - CelesTrak orbital elements with automatic SatNOGS fallback, propagated in the browser with SGP4
 - OpenSky public aircraft states with heading trails when anonymous rate limits allow access
 - USGS all-day earthquake GeoJSON feed without magnitude filtering
@@ -16,8 +18,9 @@ Oversee is a local-first operations console that fuses public geospatial data wi
 - EGP WildFireSA incidents, WFIGS perimeters, NWS alerts, and NHC tropical systems
 - NOAA radar and FEMA flood overlays for weather and hazard context
 - City-scale road traffic on both maps: an explicitly modeled OpenStreetMap motion layer by default, with optional TomTom real-time congestion colors
-- Live TomTom incidents and closures in local map views and Area Briefs when a user key is configured
-- Area Briefs with 25/100/250 km summaries, nearby hazards/cameras/assets, local weather, aviation weather, and optional OpenAQ monitor readings
+- Compact Overview, Cameras, Aviation, Hazards, Maritime, and Clean layer presets with persistent per-layer preferences
+- Live TomTom incidents and closures in local map views and Incident View when a user key is configured
+- Incident View with 25/100/250/500 km summaries, ranked activity, footprint-aware hazards, nearby cameras and moving assets, local weather, aviation weather, and optional OpenAQ monitor readings
 - Persistent watched areas with change detection, subtle notifications, and a bounded local history playback trail
 - Global Open-Meteo conditions, GDACS disasters, Aviation Weather Center observations/advisories, and NOAA space-weather context
 - Census Population Estimates for state-level population context
@@ -25,11 +28,13 @@ Oversee is a local-first operations console that fuses public geospatial data wi
 - Optional live AIS vessel positions when the user supplies an AISStream key
 - Alert cards that show affected areas and center the 3D globe on the selected alert
 - Leaflet camera browser with viewport-scoped results, live/still filters, map marker control, and an adjacent watch pane
-- Source-aware health, validated alternate camera media, stale-cache fallbacks, pinned assets, live motion trails, demo mode, and adaptive level-of-detail rendering
+- Camera coverage diagnostics with missing-state, adapter-health, and bounded geographic-gap reports
+- Source-aware health, validated alternate camera media, stale-cache fallbacks, strict missing/Null Island coordinate rejection, pinned assets, live motion trails, demo mode, and adaptive level-of-detail rendering
+- Guided first-run tour plus strict SemVer update checks and unsigned-build trust guidance for packaged releases
 
 ## Free Now, Paid Later
 
-The default experience intentionally uses free public sources. User-supplied keys can unlock NASA FIRMS, TomTom live traffic, OpenAQ monitor readings, AISStream, and keyed transportation catalogs without putting credentials in the repository. Future integrations are not shown as active settings until they actually power a feature.
+The default experience intentionally uses free public sources. User-supplied keys can unlock NASA FIRMS, TomTom live traffic, OpenAQ monitor readings, AISStream, keyed transportation catalogs, Cesium World Terrain/OSM Buildings, and Google Photorealistic 3D Tiles without putting credentials in the repository. Future integrations are not shown as active settings until they actually power a feature.
 
 ## Run Locally
 
@@ -120,7 +125,7 @@ Some public cameras expose true live players or HLS playlists, while many transp
 
 The no-key road traffic layer is an illustrative time-of-day model over real OpenStreetMap road geometry, not a traffic observation. When a TomTom key is configured, road colors use TomTom Traffic Flow while the moving points remain illustrative. Both views are limited to city/metro zoom so global navigation does not waste public-service or keyed tile requests.
 
-The main public-signal snapshot refreshes every 60 seconds. Rate-sensitive aircraft and orbital requests are cached for 10 minutes, alerts and earthquakes refresh more often, and camera stills use each source's published or inferred interval.
+The main public-signal snapshot refreshes every 60 seconds. Rate-sensitive global aircraft and orbital requests are cached for 10 minutes, while one explicitly followed aircraft receives a separate best-effort position check every 20 seconds. Alerts and earthquakes refresh more often, and camera stills use each source's published or inferred interval.
 
 Oversee keeps a local runtime cache for public API results under the user's local app data folder. If an upstream source is temporarily down after a successful previous fetch, the dashboard can keep showing a clearly labeled stale cache instead of dropping the layer entirely.
 

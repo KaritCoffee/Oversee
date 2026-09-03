@@ -109,9 +109,33 @@
               <canvas id="globeCanvas" aria-label="Interactive 3D globe"></canvas>
               <div id="cesiumGlobe" class="cesium-globe" aria-label="Interactive Cesium globe"></div>
               <div class="stage-vignette" aria-hidden="true"></div>
+              <div class="stage-notice" id="stageNotice" role="status" aria-live="polite"></div>
+              <aside class="flight-tracking-hud" id="flightTrackingHud" aria-hidden="true">
+                <div class="flight-tracking-head">
+                  <div>
+                    <span class="kicker" id="flightTrackingMode">Aircraft Follow</span>
+                    <h2 id="flightTrackingName">Tracked aircraft</h2>
+                    <p id="flightTrackingMeta">Waiting for a current position</p>
+                  </div>
+                  <button class="selection-close" type="button" id="exitFlightTracking" title="Exit aircraft tracking" aria-label="Exit aircraft tracking">
+                    <i data-lucide="x"></i>
+                  </button>
+                </div>
+                <div class="flight-telemetry" aria-label="Aircraft telemetry">
+                  <span><small>Altitude</small><strong id="flightTrackingAltitude">--</strong></span>
+                  <span><small>Speed</small><strong id="flightTrackingSpeed">--</strong></span>
+                  <span><small>Heading</small><strong id="flightTrackingHeading">--</strong></span>
+                  <span><small>Signal</small><strong id="flightTrackingSignal">--</strong></span>
+                </div>
+                <div class="flight-tracking-footer">
+                  <div class="segmented-control compact" id="flightTrackingControls" aria-label="Aircraft camera mode"></div>
+                  <small id="flightTrackingStatus">Targeted updates begin while this view is active.</small>
+                </div>
+              </aside>
               <div class="stage-toolbar">
                 <div class="segmented-control" id="scopeControls" aria-label="Scope"></div>
                 <div class="segmented-control compact" id="globeRendererControls" aria-label="Globe renderer"></div>
+                <div class="segmented-control compact globe-quality-controls" id="globeQualityControls" aria-label="Globe detail quality"></div>
                 <div class="segmented-control compact" id="earthViewControls" aria-label="Earth imagery"></div>
                 <div class="segmented-control compact" id="sensorModeControls" aria-label="Sensor mode"></div>
               </div>
@@ -140,7 +164,7 @@
               </button>
               <span class="traffic-status-chip globe-traffic-status" id="globeTrafficStatus" role="status" aria-live="polite" hidden></span>
               <div class="stage-jump-bar" aria-label="Quick navigation">
-                <button class="text-button" type="button" id="openBriefDrawer"><i data-lucide="scan-search"></i>Area brief</button>
+                <button class="text-button" type="button" id="openBriefDrawer"><i data-lucide="scan-search"></i>Incident view</button>
                 <button class="text-button" type="button" data-view-jump="camera-browser">Watch feeds</button>
                 <button class="text-button" type="button" data-view-jump="map">Globe</button>
               </div>
@@ -175,11 +199,11 @@
               <aside class="brief-drawer" id="briefDrawer" aria-hidden="true">
                 <div class="drawer-head compact">
                   <div>
-                    <span class="kicker">Location Intelligence</span>
-                    <h2 id="briefTitle">Area Brief</h2>
+                    <span class="kicker">Incident Workspace</span>
+                    <h2 id="briefTitle">Incident View</h2>
                     <p id="briefSubtitle">Inspect the globe center or select any mapped signal.</p>
                   </div>
-                  <button class="icon-button" type="button" id="closeBriefDrawer" title="Close area brief">
+                  <button class="icon-button" type="button" id="closeBriefDrawer" title="Close incident view">
                     <i data-lucide="x"></i>
                   </button>
                 </div>
@@ -188,6 +212,7 @@
                     <button class="segment" type="button" data-brief-radius="25">25 km</button>
                     <button class="segment active" type="button" data-brief-radius="100">100 km</button>
                     <button class="segment" type="button" data-brief-radius="250">250 km</button>
+                    <button class="segment" type="button" data-brief-radius="500">500 km</button>
                   </div>
                   <button class="text-button" type="button" id="pickBriefLocation"><i data-lucide="mouse-pointer-2"></i>Pick point</button>
                   <button class="text-button" type="button" id="saveWatchZone"><i data-lucide="radar"></i>Watch area</button>
@@ -297,7 +322,7 @@
               <button class="segment" type="button" id="toggleGlobalWeatherMap">Global Weather</button>
               <button class="segment" type="button" id="toggleFloodOverlay">FEMA Flood</button>
               <button class="segment" type="button" id="toggleTrafficOverlay" aria-pressed="false" title="Road traffic: modeled without a key, live congestion colors with a TomTom key">Road Traffic</button>
-              <button class="segment" type="button" id="pickBriefOnMap">Area Brief</button>
+              <button class="segment" type="button" id="pickBriefOnMap">Incident View</button>
               <span class="traffic-status-chip" id="cameraTrafficStatus" role="status" aria-live="polite" hidden></span>
               <label class="map-dot-toggle">
                 <input id="showCameraMapMarkers" type="checkbox" checked />
@@ -422,6 +447,7 @@
             </button>
           </div>
           <div class="source-health-overview" id="sourceHealthSummary"></div>
+          <section class="camera-diagnostics" id="cameraCoverageDiagnostics" aria-live="polite"></section>
           <div class="source-grid" id="sourceGrid"></div>
           <div class="future-stack">
             <h3>Paid Later</h3>
@@ -469,7 +495,7 @@
             </section>
             <details class="privacy-card">
               <summary>Local data, privacy, and limitations</summary>
-              <p>API keys and personal camera entries stay in Oversee's local application-data folder. Keys are sent only from the local server to the provider they unlock and are excluded from diagnostic exports.</p>
+              <p>API keys and personal camera entries stay in Oversee's local application-data folder and are excluded from diagnostic exports. Most provider keys remain server-side; Cesium ion and Google map credentials are delivered only to this local interface because those tile services require browser-side tokens. Restrict both credentials at their provider before sharing the app.</p>
               <p>Map signals come from best-effort public sources and can be delayed, cached, incomplete, or unavailable. Use each official source link before making an important decision.</p>
             </details>
             <div class="settings-actions">
@@ -494,14 +520,16 @@
               <div>
                 <span class="kicker">Welcome to Oversee</span>
                 <h2>One globe, many public sources</h2>
-                <p>Use layers for the operating picture, Area Brief for local context, and Watches for meaningful changes.</p>
+                <p>Start with a clean view preset, investigate a place, and verify anything important at its official source.</p>
               </div>
               <button class="icon-button" type="button" data-close-modal title="Close"><i data-lucide="x"></i></button>
             </div>
             <div class="onboarding-grid">
-              <article><i data-lucide="globe-2"></i><h3>Explore</h3><p>Click signals for details. Use Area Brief to inspect a radius without crowding the globe.</p></article>
+              <article><i data-lucide="globe-2"></i><h3>Explore</h3><p>Click signals for details. Use Incident View to inspect a radius without crowding the globe.</p></article>
+              <article><i data-lucide="sliders-horizontal"></i><h3>Choose A View</h3><p>Use the layer preset menu for Cameras, Aviation, Hazards, Maritime, or an unobstructed globe.</p></article>
+              <article><i data-lucide="scan-search"></i><h3>Investigate</h3><p>Incident View gathers nearby hazards, cameras, movement, weather, traffic, and a recency-ranked activity feed.</p></article>
               <article><i data-lucide="radar"></i><h3>Watch</h3><p>Save important places and Oversee will identify newly observed hazards and moving assets nearby.</p></article>
-              <article><i data-lucide="history"></i><h3>Replay</h3><p>History is retained locally so you can compare earlier operating pictures after restarting the app.</p></article>
+              <article><i data-lucide="plane"></i><h3>Track</h3><p>Select an aircraft to use Follow, Chase, or Cockpit views with focused position updates.</p></article>
               <article><i data-lucide="badge-info"></i><h3>Verify</h3><p>Every layer is best-effort public data. Check freshness and open the official source before acting.</p></article>
             </div>
             <button class="text-button onboarding-finish" type="button" data-close-modal>Start exploring</button>

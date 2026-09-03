@@ -74,8 +74,11 @@ export class MotionStore {
         velocity: Math.max(0, Number(item.velocity || 0)),
       };
       const previous = track.at(-1);
-      if (previous && sourceAt <= previous.sourceAt) {
-        Object.assign(previous, fix, { sourceAt: previous.sourceAt });
+      if (previous && sourceAt < previous.sourceAt) {
+        // A slower aggregate refresh must not move a focused track back to an older fix.
+        previous.observedAt = Math.max(previous.observedAt, observedAt);
+      } else if (previous && sourceAt === previous.sourceAt) {
+        Object.assign(previous, fix);
       } else {
         track.push(fix);
       }

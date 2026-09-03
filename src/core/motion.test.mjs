@@ -24,3 +24,16 @@ test("destination projection keeps coordinates finite", () => {
   assert.ok(Number.isFinite(result.lat));
   assert.ok(result.lng >= -180 && result.lng <= 180);
 });
+
+test("an older aggregate fix cannot replace a newer focused fix", () => {
+  const store = new MotionStore({ renderDelayMs: 0 });
+  const newer = { id: "tracked", lat: 40, lng: -75, time: "2026-01-01T00:01:00Z" };
+  const older = { id: "tracked", lat: 10, lng: 20, time: "2026-01-01T00:00:00Z" };
+  store.ingest("flight", [newer], Date.parse(newer.time));
+  store.ingest("flight", [older], Date.parse(newer.time) + 10_000);
+
+  const displayed = store.display("flight", newer, Date.parse(newer.time));
+  assert.equal(displayed.lat, newer.lat);
+  assert.equal(displayed.lng, newer.lng);
+  assert.equal(store.trail("flight", newer.id).length, 1);
+});

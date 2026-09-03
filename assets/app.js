@@ -7,8 +7,27 @@ import { SatellitePropagator } from "../src/core/satellite-motion.js";
 import { summarizeSourceHealth } from "../src/core/source-health.js";
 import { trafficModelForRoad } from "../src/core/traffic-model.js";
 import { collectNearbySignals, evaluateWatchZone, historyFrameItems } from "../src/core/location-brief.js";
+import { LAYER_PRESETS, applyLayerPreset, detectLayerPreset, normalizeLayerPreferences } from "../src/core/layer-presets.js";
+import { buildIncidentView, suggestIncidentRadiusKm } from "../src/core/incident-view.js";
 import { CesiumPointLayer } from "../src/globe/cesium-point-layer.js";
 import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
+import {
+  GLOBE_QUALITY_MODES,
+  globeQualityAvailability,
+  globeQualityMode,
+  normalizeGlobeQuality,
+  resolveGlobeQuality,
+} from "../src/globe/globe-quality.js";
+import {
+  AIRCRAFT_TRACKING_MODES,
+  aircraftSignalState,
+  classifyAircraft,
+  normalizeAircraftTrackingMode,
+  smoothHeading,
+  trackingCameraProfile,
+  trackingTelemetry,
+} from "../src/globe/aircraft-tracking.js";
+import { aircraftModelDataUri } from "../src/globe/aircraft-models.js";
 
 (function () {
   const DATA = globalThis.OVERSEE_DATA || { feeds: [], sources: [], layers: [] };
@@ -56,6 +75,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     { id: "launches", label: "Missions", color: "#ffdb66", icon: "rocket", advanced: true, defaultOn: false },
     { id: "radio", label: "Radio", color: "#ff78c8", icon: "radio", advanced: true, defaultOn: false },
   ];
+  const LAYER_IDS = LAYERS.map((layer) => layer.id);
+  const DEFAULT_LAYERS = Object.fromEntries(LAYERS.map((layer) => [layer.id, layer.defaultOn !== false]));
 
   const CAMERA_FILTERS = [
     { id: "all", label: "All Cameras" },
@@ -77,9 +98,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       detail: "Adds no-key camera catalogs from Spain DGT, Madrid, Hong Kong, Singapore, New Zealand, New South Wales, Puerto Rico, Panama Canal pages, and other official public portals where direct media is available.",
     },
     {
-      name: "Bring-Your-Own-Key Camera APIs",
+      name: "Supplemental Camera APIs",
       status: "Optional official feeds",
-      detail: "Wisconsin 511, Louisiana 511, DriveNC, and Alberta 511 adapters stay inactive until the user enters their own developer key in Settings.",
+      detail: "Wisconsin 511 and Louisiana 511 are already covered by public no-key catalogs. Optional developer keys can supplement those records and enable DriveNC, Alberta 511, and other keyed agency endpoints.",
     },
     {
       name: "CelesTrak / SatNOGS Orbital Data",
@@ -108,8 +129,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     },
     {
       name: "OpenSky Network",
-      status: "Best effort",
-      detail: "Public aircraft states are cached for 10 minutes to respect anonymous rate limits; trails show recent heading and observed movement.",
+      status: "Best effort + focused tracking",
+      detail: "The global OpenSky picture is cached for 10 minutes to respect anonymous limits. Selecting Follow, Chase, or Cockpit adds a 20-second ADSB.lol/OpenSky position check for that one aircraft only.",
     },
     {
       name: "Launch Library 2 / Radio Browser",
@@ -159,17 +180,17 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     {
       name: "Open-Meteo",
       status: "Free global forecast model",
-      detail: "Global current conditions, wind, temperature, and location forecasts power the Weather overlay and Area Brief without requiring a key.",
+      detail: "Global current conditions, wind, temperature, and location forecasts power the Weather overlay and Incident View without requiring a key.",
     },
     {
       name: "Aviation Weather Center",
       status: "Free official aviation weather",
-      detail: "Nearby METAR observations and active air-safety advisories appear inside Area Briefs so they add context without crowding the globe.",
+      detail: "Nearby METAR observations and active air-safety advisories appear inside Incident View so they add context without crowding the globe.",
     },
     {
       name: "NOAA Space Weather",
       status: "Free official space-weather feeds",
-      detail: "Current NOAA alerts and planetary K-index observations are included in Area Brief context and source diagnostics.",
+      detail: "Current NOAA alerts and planetary K-index observations are included in Incident View context and source diagnostics.",
     },
     {
       name: "GDELT Cuba Reporting",
@@ -179,7 +200,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     {
       name: "OpenAQ",
       status: "Optional local air-quality context",
-      detail: "A user-supplied OpenAQ v3 key adds nearby public monitor measurements to Area Briefs. Oversee reports source values and units without inventing an AQI conversion.",
+      detail: "A user-supplied OpenAQ v3 key adds nearby public monitor measurements to Incident View. Oversee reports source values and units without inventing an AQI conversion.",
     },
     {
       name: "OpenStreetMap / Leaflet",
@@ -212,7 +233,11 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     sensorMode: "crt",
     earthView: "ops",
     globeRenderer: loadGlobeRendererPreference(),
-    layers: Object.fromEntries(LAYERS.map((layer) => [layer.id, layer.defaultOn !== false])),
+    globeQuality: loadGlobeQualityPreference(),
+    globeConfig: null,
+    globeQualityLoading: false,
+    stageNoticeTimer: null,
+    layers: loadLayerPreferences(DEFAULT_LAYERS),
     layerMenuOpen: false,
     snapshot: null,
     query: "",
@@ -294,6 +319,19 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     historySamples: [],
     historyLoaded: false,
     playbackSample: null,
+    flightTracking: {
+      active: false,
+      id: "",
+      mode: "follow",
+      item: null,
+      pollTimer: null,
+      polling: false,
+      misses: 0,
+      lastPollAt: 0,
+      lastHudAt: 0,
+      smoothedHeading: null,
+      smoothedPosition: null,
+    },
   };
 
   const globe = {
@@ -334,6 +372,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     historySource: null,
     incidentSource: null,
     weatherGridSource: null,
+    trackedAircraftSource: null,
+    trackedModelEntity: null,
+    trackedModelKind: "",
     renderRetry: null,
     motionTimer: null,
     lastSelectionUpdate: 0,
@@ -342,6 +383,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     trafficRefreshTimer: null,
     trafficRequestToken: 0,
     trafficBoundsKey: "",
+    qualityRequestToken: 0,
+    buildingsTileset: null,
+    photorealisticTileset: null,
   };
 
   const motionStore = new MotionStore({ renderDelayMs: 15_000, maxCoastMs: 120_000 });
@@ -371,6 +415,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     settingsDrawer: document.getElementById("settingsDrawer"),
     sourceGrid: document.getElementById("sourceGrid"),
     sourceHealthSummary: document.getElementById("sourceHealthSummary"),
+    cameraCoverageDiagnostics: document.getElementById("cameraCoverageDiagnostics"),
     settingsForm: document.getElementById("settingsForm"),
     settingsGrid: document.getElementById("settingsGrid"),
     settingsStatus: document.getElementById("settingsStatus"),
@@ -388,6 +433,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     customCameraList: document.getElementById("customCameraList"),
     scopeControls: document.getElementById("scopeControls"),
     globeRendererControls: document.getElementById("globeRendererControls"),
+    globeQualityControls: document.getElementById("globeQualityControls"),
     earthViewControls: document.getElementById("earthViewControls"),
     sensorModeControls: document.getElementById("sensorModeControls"),
     layerControls: document.getElementById("layerControls"),
@@ -472,6 +518,18 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     stage: document.querySelector(".stage"),
     globeCanvas: document.getElementById("globeCanvas"),
     cesiumGlobe: document.getElementById("cesiumGlobe"),
+    stageNotice: document.getElementById("stageNotice"),
+    flightTrackingHud: document.getElementById("flightTrackingHud"),
+    flightTrackingMode: document.getElementById("flightTrackingMode"),
+    flightTrackingName: document.getElementById("flightTrackingName"),
+    flightTrackingMeta: document.getElementById("flightTrackingMeta"),
+    flightTrackingAltitude: document.getElementById("flightTrackingAltitude"),
+    flightTrackingSpeed: document.getElementById("flightTrackingSpeed"),
+    flightTrackingHeading: document.getElementById("flightTrackingHeading"),
+    flightTrackingSignal: document.getElementById("flightTrackingSignal"),
+    flightTrackingStatus: document.getElementById("flightTrackingStatus"),
+    flightTrackingControls: document.getElementById("flightTrackingControls"),
+    exitFlightTracking: document.getElementById("exitFlightTracking"),
     theaterSubtitle: document.getElementById("theaterSubtitle"),
     downloadDiagnostics: document.getElementById("downloadDiagnostics"),
     openOnboarding: document.getElementById("openOnboarding"),
@@ -494,7 +552,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     refreshSnapshot({ keepSelection: false });
     setInterval(initClock, 1000);
     setInterval(() => refreshSnapshot({ keepSelection: true, quiet: true }), 60000);
-    if (!localStorage.getItem("oversee:onboarding-v3")) {
+    scheduleUpdateCheck();
+    if (!localStorage.getItem("oversee:onboarding-v4")) {
       window.setTimeout(() => toggleOnboarding(true), 1200);
     }
     if (globalThis.lucide) globalThis.lucide.createIcons();
@@ -525,6 +584,11 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     els.toggleIdleSpin.addEventListener("click", toggleIdleSpin);
     els.toggleDemoMode.addEventListener("click", () => toggleDemoMode(!state.demoMode));
     els.closeDemoMode.addEventListener("click", () => toggleDemoMode(false));
+    els.exitFlightTracking.addEventListener("click", () => stopFlightTracking("Aircraft tracking ended.", { restoreView: true }));
+    els.flightTrackingControls.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-tracking-mode]");
+      if (button) setFlightTrackingMode(button.dataset.trackingMode);
+    });
     els.cycleSensorMode.addEventListener("click", cycleSensorMode);
     els.openSourcePanel.addEventListener("click", () => toggleSourceDrawer(true));
     els.openSettingsPanel.addEventListener("click", () => toggleSettingsDrawer(true));
@@ -533,7 +597,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     els.settingsForm.addEventListener("submit", saveSettings);
     els.addCustomCamera.addEventListener("click", addCustomCamera);
     els.recheckCameras.addEventListener("click", recheckCameras);
-    els.checkForUpdates.addEventListener("click", checkForUpdates);
+    els.checkForUpdates.addEventListener("click", () => checkForUpdates());
     els.openAlertDrawer.addEventListener("click", () => toggleAlertDrawer());
     els.closeAlertDrawer.addEventListener("click", () => toggleAlertDrawer(false));
     els.openBriefDrawer.addEventListener("click", () => openBriefAtGlobeCenter());
@@ -656,6 +720,29 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         if (item) selectNearestCamera(item);
       }
 
+      const cameraGapAction = event.target.closest("[data-camera-gap]");
+      if (cameraGapAction) {
+        const lat = Number(cameraGapAction.dataset.cameraGapLat);
+        const lng = Number(cameraGapAction.dataset.cameraGapLng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          toggleSourceDrawer(false);
+          focusGlobeOnItem({ lat, lng });
+          setBriefTarget(lat, lng, "Camera coverage gap");
+        }
+      }
+
+      const flightTrackingAction = event.target.closest("[data-flight-track-mode]");
+      if (flightTrackingAction) {
+        event.preventDefault();
+        event.stopPropagation();
+        const item = findItem("flight", flightTrackingAction.dataset.flightId) || state.selection?.item;
+        if (state.flightTracking.active && state.flightTracking.id === item?.id) {
+          setFlightTrackingMode(flightTrackingAction.dataset.flightTrackMode);
+        } else if (item) {
+          startFlightTracking(item, flightTrackingAction.dataset.flightTrackMode);
+        }
+      }
+
       const openUrl = event.target.closest("[data-open-url]");
       if (openUrl) {
         window.open(openUrl.dataset.openUrl, "_blank", "noopener,noreferrer");
@@ -696,6 +783,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     });
 
     document.addEventListener("pointerdown", primeAlertAudio, { once: true, passive: true });
+    document.addEventListener("keydown", handleTrackingKeyboard);
     document.addEventListener("fullscreenchange", () => {
       if (state.demoMode) window.setTimeout(resizeGlobe, 120);
     });
@@ -731,6 +819,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     });
 
     renderGlobeRendererControls();
+    renderGlobeQualityControls();
+    renderFlightTrackingControls();
 
     els.earthViewControls.innerHTML = EARTH_VIEWS.map(
       (view) =>
@@ -765,6 +855,30 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     });
   }
 
+  function renderGlobeQualityControls() {
+    const availability = globeQualityAvailability(state.globeConfig || {});
+    els.globeQualityControls.innerHTML = GLOBE_QUALITY_MODES.map((mode) => {
+      const available = availability[mode.id];
+      const active = mode.id === state.globeQuality;
+      const suffix = available ? mode.description : `${mode.description} Configure ${mode.id === "buildings" ? "a Cesium ion token" : "a Google 3D Tiles key"} in Settings.`;
+      return `<button class="segment ${active ? "active" : ""} ${available ? "" : "locked"}" type="button" data-globe-quality="${mode.id}" aria-pressed="${active}" title="${escapeHtml(suffix)}">
+        ${available || mode.id === "standard" ? "" : '<i data-lucide="lock-keyhole"></i>'}${escapeHtml(mode.shortLabel)}
+      </button>`;
+    }).join("");
+    els.globeQualityControls.onclick = (event) => {
+      const button = event.target.closest("[data-globe-quality]");
+      if (button) setGlobeQuality(button.dataset.globeQuality);
+    };
+    if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function renderFlightTrackingControls() {
+    if (!els.flightTrackingControls) return;
+    els.flightTrackingControls.innerHTML = AIRCRAFT_TRACKING_MODES.map((mode) => `
+      <button class="segment ${state.flightTracking.mode === mode.id ? "active" : ""}" type="button" data-tracking-mode="${mode.id}" title="${escapeHtml(mode.description)}" aria-pressed="${state.flightTracking.mode === mode.id}">${mode.label}</button>
+    `).join("");
+  }
+
   function renderLayerControls() {
     const renderButton = (layer) => {
       const active = state.layers[layer.id] ? "active" : "";
@@ -775,11 +889,17 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const primary = LAYERS.filter((layer) => !layer.advanced);
     const advanced = LAYERS.filter((layer) => layer.advanced);
     const enabledAdvanced = advanced.filter((layer) => state.layers[layer.id]).length;
+    const activePresetId = detectLayerPreset(state.layers, LAYER_IDS);
+    const activePreset = LAYER_PRESETS.find((preset) => preset.id === activePresetId);
     els.layerControls.innerHTML = `${primary.map(renderButton).join("")}
       <button class="layer-button layer-more-button ${enabledAdvanced ? "active" : ""}" type="button" data-layer-menu aria-expanded="${state.layerMenuOpen}">
-        <i data-lucide="layers-3"></i><span>More${enabledAdvanced ? ` ${enabledAdvanced}` : ""}</span>
+        <i data-lucide="sliders-horizontal"></i><span>${activePreset ? activePreset.label : "Custom"}</span>
       </button>
       <div class="layer-menu ${state.layerMenuOpen ? "open" : ""}" role="group" aria-label="Additional data layers">
+        <div class="layer-menu-head"><span>View presets</span><small>Fast, uncluttered layer mixes</small></div>
+        <div class="layer-preset-grid">
+          ${LAYER_PRESETS.map((preset) => `<button class="layer-preset-button ${preset.id === activePresetId ? "active" : ""}" type="button" data-layer-preset="${preset.id}" title="${escapeHtml(preset.description)}" aria-pressed="${preset.id === activePresetId}">${escapeHtml(preset.label)}</button>`).join("")}
+        </div>
         <div class="layer-menu-head"><span>Additional layers</span><small>Off by default</small></div>
         ${advanced.map(renderButton).join("")}
       </div>`;
@@ -792,15 +912,39 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         renderLayerControls();
         return;
       }
+      const presetButton = event.target.closest("[data-layer-preset]");
+      if (presetButton) {
+        state.layers = applyLayerPreset(state.layers, presetButton.dataset.layerPreset, LAYER_IDS);
+        state.layerMenuOpen = false;
+        saveLayerPreferences();
+        renderLayerControls();
+        renderGlobeLayers();
+        renderMetrics();
+        return;
+      }
       const button = event.target.closest("[data-layer]");
       if (!button) return;
       const layerId = button.dataset.layer;
       state.layers[layerId] = !state.layers[layerId];
+      saveLayerPreferences();
       renderLayerControls();
       renderGlobeLayers();
       renderMetrics();
     };
     if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function loadLayerPreferences(fallback) {
+    try {
+      const stored = JSON.parse(localStorage.getItem("oversee:layer-preferences-v1") || "null");
+      return normalizeLayerPreferences(stored, LAYER_IDS, fallback);
+    } catch {
+      return { ...fallback };
+    }
+  }
+
+  function saveLayerPreferences() {
+    localStorage.setItem("oversee:layer-preferences-v1", JSON.stringify(state.layers));
   }
 
   function renderCameraFilters() {
@@ -826,8 +970,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     els.sourceHealthSummary.innerHTML = state.snapshot
       ? `<article><span>Responding</span><strong>${formatNumber(health.responding)}/${formatNumber(health.total)}</strong><small>core public adapters</small></article>
         <article><span>Camera reach</span><strong>${formatNumber(coverage?.countries || 0)}</strong><small>countries | ${formatNumber(coverage?.regions || 0)} regions</small></article>
-        <article><span>Media health</span><strong>${formatNumber(coverage?.health?.verified || 0)}</strong><small>verified | ${formatNumber(coverage?.health?.down || 0)} down</small></article>`
+        <article><span>Recent media checks</span><strong>${formatNumber(coverage?.health?.observed || 0)}</strong><small>checked | ${formatNumber(coverage?.health?.down || 0)} down</small></article>`
       : `<p>Source diagnostics will appear after the first public-data refresh.</p>`;
+    renderCameraCoverageDiagnostics();
     els.sourceGrid.innerHTML = SOURCE_STACK.map(
       (source) => `<article class="source-card">
         <h3>${source.name}</h3>
@@ -835,6 +980,33 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         <p>${source.detail}</p>
       </article>`
     ).join("");
+  }
+
+  function renderCameraCoverageDiagnostics() {
+    const diagnostics = state.snapshot?.cameraDiagnostics;
+    if (!diagnostics) {
+      els.cameraCoverageDiagnostics.innerHTML = `<div class="empty-state">Coverage diagnostics will appear after the camera catalog loads.</div>`;
+      return;
+    }
+    const states = diagnostics.coverage?.usStates || {};
+    const missing = Array.isArray(states.missing) ? states.missing : [];
+    const lowest = Array.isArray(states.lowestCovered) ? states.lowestCovered : [];
+    const sources = diagnostics.sourceHealth?.entries || [];
+    const issues = sources.filter((source) => ["down", "stale", "degraded"].includes(source.status)).slice(0, 8);
+    const gaps = diagnostics.gaps?.entries || [];
+    const stateSummary = missing.length
+      ? `${formatNumber(states.covered || 0)}/${formatNumber(states.total || 0)} covered | Missing: ${escapeHtml(missing.slice(0, 10).join(", "))}${missing.length > 10 ? ` +${missing.length - 10}` : ""}`
+      : `All ${formatNumber(states.total || 0)} states and DC have at least one mapped public camera.`;
+    const lowRows = lowest.slice(0, 6).map((entry) => `<span>${escapeHtml(entry.name)} <strong>${formatNumber(entry.total)}</strong></span>`).join("");
+    const issueRows = issues.length
+      ? issues.map((source) => `<div class="diagnostic-row"><span>${escapeHtml(source.name)}</span><strong class="status-${escapeHtml(source.status)}">${escapeHtml(source.status)}</strong></div>`).join("")
+      : `<p>No responding camera adapter is currently marked down, stale, or degraded.</p>`;
+    const gapRows = gaps.slice(0, 6).map((gap) => `<button class="diagnostic-gap" type="button" data-camera-gap data-camera-gap-lat="${gap.center.lat}" data-camera-gap-lng="${gap.center.lng}"><span>${formatLatLng(gap.center.lat, gap.center.lng)}</span><small>${formatNumber(gap.neighborCameraCount)} cameras around this empty cell</small></button>`).join("");
+    els.cameraCoverageDiagnostics.innerHTML = `
+      <div class="camera-diagnostics-head"><div><span class="kicker">Camera Coverage</span><h3>${formatNumber(diagnostics.counts?.playable || 0)} playable of ${formatNumber(diagnostics.counts?.total || 0)}</h3></div><small>${formatNumber(diagnostics.coverage?.countries?.covered || 0)} countries</small></div>
+      <details open><summary>United States reach</summary><p>${stateSummary}</p>${lowRows ? `<div class="diagnostic-chips">${lowRows}</div>` : ""}</details>
+      <details><summary>Adapter health</summary><div class="diagnostic-list">${issueRows}</div></details>
+      <details><summary>Geographic gaps</summary><p>Empty map cells surrounded by existing coverage. These guide future official-source research; they do not imply a camera exists there.</p><div class="diagnostic-gap-grid">${gapRows || "No bounded gap cells were identified."}</div></details>`;
   }
 
   function toggleSourceDrawer(open) {
@@ -866,6 +1038,20 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     } catch (error) {
       els.settingsStatus.textContent = `Settings unavailable: ${error.message}`;
     }
+  }
+
+  async function loadGlobeConfig(options = {}) {
+    if (state.globeConfig && !options.force) return state.globeConfig;
+    try {
+      const response = await fetch(`/api/globe-config?ts=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`Globe configuration failed with status ${response.status}`);
+      state.globeConfig = await response.json();
+    } catch (error) {
+      console.warn("Optional globe providers unavailable", error);
+      state.globeConfig = { capabilities: { cesiumIon: false, google3dTiles: false } };
+    }
+    renderGlobeQualityControls();
+    return state.globeConfig;
   }
 
   function renderSettings() {
@@ -980,30 +1166,45 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     }
   }
 
-  async function checkForUpdates() {
-    if (state.latestRelease?.updateAvailable && state.latestRelease.releaseUrl) {
+  async function checkForUpdates(options = {}) {
+    const silent = Boolean(options.silent);
+    if (!silent && state.latestRelease?.updateAvailable && state.latestRelease.releaseUrl) {
       window.open(state.latestRelease.releaseUrl, "_blank", "noopener,noreferrer");
       return;
     }
-    els.checkForUpdates.disabled = true;
-    els.settingsStatus.textContent = "Checking the official GitHub release feed...";
+    if (!silent) {
+      els.checkForUpdates.disabled = true;
+      els.settingsStatus.textContent = "Checking the official GitHub release feed...";
+    }
     try {
       const response = await fetch(`/api/update-status?ts=${Date.now()}`);
       const payload = await response.json();
       if (!response.ok || !payload.ok) throw new Error(payload.message || "Release information is unavailable");
       state.latestRelease = payload;
+      localStorage.setItem("oversee:update-check-at", String(Date.now()));
+      els.openSettingsPanel.classList.toggle("update-available", Boolean(payload.updateAvailable));
+      els.openSettingsPanel.title = payload.updateAvailable
+        ? `Oversee ${payload.latestVersion} is available in Settings`
+        : "API key settings";
       if (payload.updateAvailable) {
-        els.settingsStatus.textContent = `Oversee ${payload.latestVersion} is available. Press Download Update to open the official release.`;
+        if (!silent) els.settingsStatus.textContent = `Oversee ${payload.latestVersion} is available. Press Download Update to open the official release.`;
         els.checkForUpdates.innerHTML = `<i data-lucide="download"></i>Download ${escapeHtml(payload.latestVersion)}`;
+        if (silent) showStageNotice(`Oversee ${payload.latestVersion} is available from the official release page.`);
       } else {
-        els.settingsStatus.textContent = `Oversee ${payload.currentVersion} is the latest published release.`;
+        if (!silent) els.settingsStatus.textContent = `Oversee ${payload.currentVersion} is the latest published release.`;
       }
       if (globalThis.lucide) globalThis.lucide.createIcons();
     } catch (error) {
-      els.settingsStatus.textContent = error.message;
+      if (!silent) els.settingsStatus.textContent = error.message;
     } finally {
-      els.checkForUpdates.disabled = false;
+      if (!silent) els.checkForUpdates.disabled = false;
     }
+  }
+
+  function scheduleUpdateCheck() {
+    const lastCheck = Number(localStorage.getItem("oversee:update-check-at") || 0);
+    if (Date.now() - lastCheck < 24 * 60 * 60 * 1000) return;
+    window.setTimeout(() => checkForUpdates({ silent: true }), 8000);
   }
 
   async function saveSettings(event) {
@@ -1027,6 +1228,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       state.trafficStatus = null;
       state.trafficStatusFetchedAt = 0;
       renderSettings();
+      await loadGlobeConfig({ force: true });
+      await applyCesiumGlobeQuality(state.globeQuality, { quiet: true });
       refreshSnapshot({ keepSelection: true, quiet: false, force: true });
       if (state.globeTrafficOverlay) updateCesiumTrafficLayer();
       if (state.mapTrafficOverlay) refreshMapTrafficOverlay();
@@ -1061,15 +1264,18 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
 
   function openBriefAtGlobeCenter() {
     const center = currentGlobeCenter();
-    setBriefTarget(center.lat, center.lng, "Globe center");
+    setBriefTarget(center.lat, center.lng, "Globe center", null);
   }
 
   function openBriefForItem(item) {
     const lat = Number(item?.lat);
     const lng = Number(item?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-    const label = item.name || item.title || item.callsign || item.area || "Selected location";
-    setBriefTarget(lat, lng, label);
+    const label = item.name || item.title || item.event || item.callsign || item.location || item.area || "Selected location";
+    const suggested = suggestIncidentRadiusKm(item);
+    state.briefRadiusKm = [25, 100, 250, 500].find((radius) => radius >= suggested) || 500;
+    renderBriefRadiusControls();
+    setBriefTarget(lat, lng, label, item);
   }
 
   function armBriefPickMode() {
@@ -1079,9 +1285,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     els.briefSubtitle.textContent = "Click an empty point on either map to inspect that area.";
   }
 
-  function setBriefTarget(lat, lng, label = "Selected location") {
+  function setBriefTarget(lat, lng, label = "Selected location", sourceItem = null) {
     if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
-    state.briefTarget = { lat: Number(lat), lng: Number(lng), label: String(label || "Selected location") };
+    state.briefTarget = { lat: Number(lat), lng: Number(lng), label: String(label || "Selected location"), sourceItem };
     state.briefPickMode = false;
     els.briefDrawer.classList.remove("pick-mode");
     els.briefTitle.textContent = state.briefTarget.label;
@@ -1164,7 +1370,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
 
   function renderBriefOverview(options = {}) {
     if (!state.briefTarget) {
-      els.briefOverview.innerHTML = `<div class="empty-state">Choose Area Brief to inspect the center of the globe, or use Pick Point.</div>`;
+      els.briefOverview.innerHTML = `<div class="empty-state">Choose Incident View to inspect the center of the globe, or use Pick Point.</div>`;
       return;
     }
     const nearby = collectNearbySignals(state.snapshot || buildFallbackSnapshot(), state.briefTarget, state.briefRadiusKm, { maxPerType: 60 });
@@ -1172,8 +1378,26 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const aviation = state.briefContext?.aviation || { stations: [], advisories: [] };
     const traffic = state.briefContext?.traffic || { incidents: [] };
     const airQuality = state.briefContext?.airQuality || { configured: false, stations: [] };
-    const hazards = [...nearby.alerts, ...nearby.fires, ...nearby.quakes].sort((left, right) => left.distanceKm - right.distanceKm);
     const moving = [...nearby.flights, ...nearby.satellites, ...nearby.vessels].sort((left, right) => left.distanceKm - right.distanceKm);
+    const incident = buildIncidentView(state.briefTarget.sourceItem || state.briefTarget, {
+      ...(state.snapshot || buildFallbackSnapshot()),
+      context: state.briefContext || {},
+      weather,
+      traffic,
+      aviation,
+      airQuality,
+    }, { radiusKm: state.briefRadiusKm, now: state.snapshot?.generatedAt });
+    const incidentHazards = [
+      ...(incident.nearby.alerts || []),
+      ...(incident.nearby.fires || []),
+      ...(incident.nearby.earthquakes || []),
+    ].sort((left, right) => left.distanceKm - right.distanceKm || right.activityScore - left.activityScore);
+    const incidentHazardCount = (incident.counts.alerts?.nearby || 0)
+      + (incident.counts.fires?.nearby || 0)
+      + (incident.counts.earthquakes?.nearby || 0);
+    const incidentMovingCount = (incident.counts.aircraft?.nearby || 0)
+      + (incident.counts.satellites?.nearby || 0)
+      + (incident.counts.vessels?.nearby || 0);
     const weatherCard = options.loading
       ? `<article class="brief-card"><span class="kicker">Live Context</span><h3>Loading local conditions</h3><p>Gathering weather, aviation observations, and road incidents for this radius.</p></article>`
       : weather
@@ -1181,20 +1405,21 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
         : `<article class="brief-card attention"><span class="kicker">Weather</span><h3>Conditions unavailable</h3><p>${escapeHtml(state.briefContext?.error || "The public forecast source did not respond.")}</p></article>`;
     const space = state.snapshot?.spaceWeather;
     els.briefOverview.innerHTML = `<div class="brief-stack">
-      <article class="brief-card">
-        <span class="kicker">Within ${formatNumber(state.briefRadiusKm)} km</span>
-        <h3>${escapeHtml(state.briefTarget.label)}</h3>
+      <article class="brief-card incident-overview status-${escapeHtml(incident.overview.status)}">
+        <div class="incident-overview-head"><div><span class="kicker">Incident View | ${formatNumber(state.briefRadiusKm)} km</span><h3>${escapeHtml(state.briefTarget.label)}</h3></div><strong>${escapeHtml(incident.overview.status)}</strong></div>
+        <p>${escapeHtml(incident.overview.text)}</p>
         <div class="brief-stat-grid">
-          ${briefStat(hazards.length, "Hazards")}
-          ${briefStat(nearby.cameras.length, "Cameras")}
-          ${briefStat(moving.length, "Moving")}
+          ${briefStat(incidentHazardCount, "Hazards")}
+          ${briefStat(incident.counts.cameras?.nearby || 0, "Cameras")}
+          ${briefStat(incidentMovingCount, "Moving")}
           ${briefStat(traffic.incidents?.length || 0, "Road events")}
           ${briefStat(aviation.stations?.length || 0, "Airports")}
-          ${briefStat(nearby.total, "Signals")}
+          ${briefStat(incident.counts.totalNearby || 0, "Signals")}
         </div>
       </article>
       ${weatherCard}
-      ${renderBriefListCard("Nearby hazards", hazards, 7)}
+      ${renderIncidentActivity(incident.activity)}
+      ${renderIncidentNearbyCard("Nearby hazards", incidentHazards, 7)}
       ${renderTrafficIncidentCard(traffic)}
       ${renderAviationCard(aviation)}
       ${renderAirQualityCard(airQuality)}
@@ -1203,6 +1428,39 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       ${space ? `<article class="brief-card"><span class="kicker">Space Weather</span><h3>${escapeHtml(space.geomagneticLevel || "Unknown")} geomagnetic conditions${space.kp == null ? "" : ` | Kp ${Number(space.kp).toFixed(1)}`}</h3><p>${escapeHtml(shorten(space.alerts?.[0]?.message || "No recent NOAA space-weather alert in the loaded summary.", 220))}</p></article>` : ""}
     </div>`;
     if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function renderIncidentActivity(activity = []) {
+    if (!activity.length) return `<article class="brief-card"><span class="kicker">Recent Activity</span><h3>No ranked incident activity nearby</h3><p>The currently loaded public sources contain no recent hazard or moving-asset item inside this radius.</p></article>`;
+    const rows = activity.slice(0, 8).map((item) => {
+      const type = incidentAppType(item.type);
+      const when = item.time ? formatTimeAgo(item.time) : "time unavailable";
+      return `<button class="brief-item incident-activity-item severity-${escapeHtml(item.severityLevel)}" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}">
+        <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(shorten(item.summary, 110))}</small></span>
+        <em>${escapeHtml(when)}</em>
+      </button>`;
+    }).join("");
+    return `<article class="brief-card"><span class="kicker">Recent Activity</span><h3>Ranked by severity, freshness, and distance</h3><div class="brief-list incident-activity-list">${rows}</div></article>`;
+  }
+
+  function renderIncidentNearbyCard(title, items, limit) {
+    if (!items?.length) return `<article class="brief-card"><h3>${escapeHtml(title)}</h3><p>Nothing from the currently loaded public sources is inside or affects this radius.</p></article>`;
+    const rows = items.slice(0, limit).map((item) => {
+      const type = incidentAppType(item.type);
+      const footprintText = item.distanceKm <= 0 && item.centerDistanceKm > 0.1
+        ? `Affects this area | center ${formatNumber(Math.round(item.centerDistanceKm))} km away`
+        : `${item.distanceKm < 10 ? item.distanceKm.toFixed(1) : Math.round(item.distanceKm)} km away`;
+      const context = [footprintText, item.severity, item.source].filter(Boolean).join(" | ");
+      return `<button class="brief-item incident-activity-item severity-${escapeHtml(item.severityLevel)}" type="button" data-select-type="${escapeHtml(type)}" data-select-id="${escapeHtml(item.id)}">
+        <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(shorten(context, 120))}</small></span>
+        <em>${item.time ? escapeHtml(formatTimeAgo(item.time)) : ""}</em>
+      </button>`;
+    }).join("");
+    return `<article class="brief-card"><h3>${escapeHtml(title)}</h3><div class="brief-list">${rows}</div></article>`;
+  }
+
+  function incidentAppType(type) {
+    return ({ earthquake: "quake", aircraft: "flight" })[type] || type;
   }
 
   function briefStat(value, label) {
@@ -1329,7 +1587,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     const unread = state.watchZones.reduce((sum, zone) => sum + Number(zone.unread || 0), 0);
     els.watchZoneBadge.textContent = formatNumber(unread || state.watchZones.length);
     if (!state.watchZones.length) {
-      els.briefWatches.innerHTML = `<div class="empty-state">No watched areas yet. Open an Area Brief, choose a radius, and press Watch Area.</div>`;
+      els.briefWatches.innerHTML = `<div class="empty-state">No watched areas yet. Open Incident View, choose a radius, and press Watch Area.</div>`;
       return;
     }
     const cards = state.watchZones.map((zone) => `<article class="watch-zone-card ${zone.unread ? "has-new" : ""}">
@@ -1468,13 +1726,200 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   function toggleOnboarding(open) {
     els.onboardingModal.classList.toggle("open", Boolean(open));
     els.onboardingModal.setAttribute("aria-hidden", open ? "false" : "true");
-    if (!open) localStorage.setItem("oversee:onboarding-v3", "seen");
+    if (!open) localStorage.setItem("oversee:onboarding-v4", "seen");
   }
 
   function toggleIdleSpin() {
+    if (state.flightTracking.active) stopFlightTracking("Aircraft tracking ended so globe rotation can resume.", { restoreView: true });
     state.idleSpin = !state.idleSpin;
     els.toggleIdleSpin.classList.toggle("active", state.idleSpin);
     els.toggleIdleSpin.setAttribute("aria-pressed", state.idleSpin ? "true" : "false");
+  }
+
+  async function startFlightTracking(item, mode = "follow") {
+    const id = String(item?.icao24 || item?.id || "").replace(/^flight-/i, "").replace(/^~/, "").toLowerCase();
+    if (!/^[0-9a-f]{6}$/.test(id)) {
+      showStageNotice("This aircraft does not publish a trackable ICAO identifier.", "warning");
+      return;
+    }
+    if (state.demoMode) await toggleDemoMode(false);
+    if (state.globeRenderer !== "cesium") setGlobeRenderer("cesium");
+    await ensureCesiumGlobeReady();
+    if (!cesiumGlobe.ready) {
+      showStageNotice("Aircraft views require the Cesium globe, which is unavailable right now.", "error");
+      return;
+    }
+
+    stopFlightTracking("", { quiet: true, restoreView: false });
+    state.idleSpin = false;
+    els.toggleIdleSpin.classList.remove("active");
+    els.toggleIdleSpin.setAttribute("aria-pressed", "false");
+    state.flightTracking.active = true;
+    state.flightTracking.id = `flight-${id}`;
+    state.flightTracking.mode = normalizeAircraftTrackingMode(mode);
+    state.flightTracking.item = { ...item, id: `flight-${id}`, icao24: id };
+    state.flightTracking.misses = 0;
+    state.flightTracking.lastPollAt = 0;
+    state.flightTracking.lastHudAt = 0;
+    state.flightTracking.smoothedHeading = null;
+    state.flightTracking.smoothedPosition = null;
+    state.flightTracking.lastFrameAt = 0;
+    state.flightTracking.cameraPrimed = false;
+    els.stage.classList.add("tracking-active");
+    els.flightTrackingHud.classList.add("visible");
+    els.flightTrackingHud.setAttribute("aria-hidden", "false");
+    renderFlightTrackingControls();
+    ensureTrackedAircraftModel(state.flightTracking.item);
+    renderFlightTrackingHud();
+    const modeLabel = AIRCRAFT_TRACKING_MODES.find((entry) => entry.id === state.flightTracking.mode)?.label || "Follow";
+    showStageNotice(`${modeLabel} aircraft camera engaged. Targeted positions refresh every 20 seconds.`);
+    pollTrackedFlight();
+  }
+
+  function stopFlightTracking(message = "", options = {}) {
+    const tracker = state.flightTracking;
+    const lastItem = tracker.item;
+    if (tracker.pollTimer) window.clearTimeout(tracker.pollTimer);
+    tracker.pollTimer = null;
+    tracker.polling = false;
+    tracker.active = false;
+    tracker.id = "";
+    tracker.item = null;
+    tracker.misses = 0;
+    tracker.lastPollAt = 0;
+    tracker.lastHudAt = 0;
+    tracker.smoothedHeading = null;
+    tracker.smoothedPosition = null;
+    tracker.lastFrameAt = 0;
+    tracker.cameraPrimed = false;
+    cesiumGlobe.trackedAircraftSource?.entities.removeAll();
+    cesiumGlobe.trackedModelEntity = null;
+    cesiumGlobe.trackedModelKind = "";
+    els.stage.classList.remove("tracking-active");
+    els.flightTrackingHud.classList.remove("visible");
+    els.flightTrackingHud.setAttribute("aria-hidden", "true");
+    cesiumGlobe.viewer?.scene?.requestRender?.();
+    if (options.restoreView && lastItem && state.globeRenderer === "cesium" && cesiumGlobe.ready) {
+      focusGlobeOnItem(lastItem);
+    }
+    if (state.selection?.type === "flight" && state.selection.item) {
+      renderSelectionCard("flight", state.selection.item);
+    }
+    if (message && !options.quiet) showStageNotice(message);
+  }
+
+  function setFlightTrackingMode(mode) {
+    if (!state.flightTracking.active) return;
+    state.flightTracking.mode = normalizeAircraftTrackingMode(mode);
+    state.flightTracking.cameraPrimed = false;
+    renderFlightTrackingControls();
+    renderFlightTrackingHud();
+    if (cesiumGlobe.trackedModelEntity?.model) {
+      cesiumGlobe.trackedModelEntity.model.show = state.flightTracking.mode !== "cockpit";
+    }
+    if (state.selection?.type === "flight" && state.selection.id === state.flightTracking.id) {
+      renderSelectionCard("flight", state.selection.item || state.flightTracking.item);
+    }
+    showStageNotice(`${AIRCRAFT_TRACKING_MODES.find((entry) => entry.id === state.flightTracking.mode)?.label || "Follow"} camera engaged.`);
+  }
+
+  function handleTrackingKeyboard(event) {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (/^(?:INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || "")) return;
+    if (event.key === "Escape" && state.flightTracking.active) {
+      event.preventDefault();
+      stopFlightTracking("Aircraft tracking ended.", { restoreView: true });
+      return;
+    }
+    if (event.key.toLowerCase() === "c") {
+      const item = state.flightTracking.item || (state.selection?.type === "flight" ? state.selection.item : null);
+      if (!item) return;
+      event.preventDefault();
+      if (state.flightTracking.active) setFlightTrackingMode("cockpit");
+      else startFlightTracking(item, "cockpit");
+    }
+  }
+
+  async function pollTrackedFlight() {
+    const tracker = state.flightTracking;
+    if (!tracker.active || tracker.polling) return;
+    const requestedId = tracker.id;
+    tracker.polling = true;
+    renderFlightTrackingHud();
+    try {
+      const response = await fetch(`/api/flight-track?id=${encodeURIComponent(requestedId)}&ts=${Date.now()}`, { cache: "no-store" });
+      const payload = await response.json();
+      if (!response.ok || !payload.flight) throw new Error(payload.error || "No current aircraft position");
+      if (!tracker.active || tracker.id !== requestedId) return;
+      tracker.misses = 0;
+      tracker.lastPollAt = Date.now();
+      updateTrackedFlightItem(payload.flight);
+    } catch (error) {
+      if (!tracker.active || tracker.id !== requestedId) return;
+      tracker.misses += 1;
+      console.warn("Tracked aircraft refresh failed", error);
+      if (tracker.misses >= 15 && aircraftSignalState(tracker.item).id === "lost") {
+        stopFlightTracking("The aircraft stopped broadcasting. Last known position remains selected.", { quiet: false, restoreView: true });
+        return;
+      }
+      els.flightTrackingStatus.textContent = `Live refresh missed (${tracker.misses}). Holding the last position and trying again.`;
+    } finally {
+      tracker.polling = false;
+      if (tracker.active && tracker.id === requestedId) {
+        tracker.pollTimer = window.setTimeout(pollTrackedFlight, 20_000);
+      }
+    }
+  }
+
+  function updateTrackedFlightItem(flight) {
+    const tracker = state.flightTracking;
+    const merged = { ...(tracker.item || {}), ...flight, id: tracker.id, icao24: flight.icao24 || tracker.id.replace(/^flight-/, "") };
+    tracker.item = merged;
+    if (state.snapshot?.flights) {
+      const index = state.snapshot.flights.findIndex((item) => item.id === tracker.id);
+      if (index >= 0) state.snapshot.flights[index] = merged;
+      else state.snapshot.flights.unshift(merged);
+    }
+    motionStore.ingest("flight", [merged], Date.now());
+    appendTrackPoint("flight", merged, Date.now(), 24);
+    if (state.selection?.type === "flight" && state.selection.id === tracker.id) {
+      state.selection.item = merged;
+      renderSelectionCard("flight", merged);
+      renderWatch("flight", merged);
+    }
+    ensureTrackedAircraftModel(merged);
+    renderCesiumLayers();
+    renderFlightTrackingHud();
+  }
+
+  function renderFlightTrackingHud() {
+    const tracker = state.flightTracking;
+    if (!tracker.active || !tracker.item) return;
+    const item = displayItemForGlobe("flight", tracker.item);
+    const classification = classifyAircraft(item);
+    const telemetry = trackingTelemetry(item);
+    const mode = AIRCRAFT_TRACKING_MODES.find((entry) => entry.id === tracker.mode) || AIRCRAFT_TRACKING_MODES[0];
+    els.flightTrackingMode.textContent = `${mode.label} | ${classification.label}`;
+    els.flightTrackingName.textContent = item.callsign || item.registration || item.icao24 || "Tracked aircraft";
+    els.flightTrackingMeta.textContent = [item.aircraftType, item.registration, item.source].filter(Boolean).join(" | ") || "Public ADS-B position";
+    els.flightTrackingAltitude.textContent = `${formatNumber(telemetry.altitudeFeet)} ft`;
+    els.flightTrackingSpeed.textContent = `${formatNumber(telemetry.speedKnots)} kt`;
+    els.flightTrackingHeading.textContent = telemetry.headingDegrees == null ? "unknown" : `${String(telemetry.headingDegrees).padStart(3, "0")} deg`;
+    els.flightTrackingSignal.textContent = trackingSignalAge(telemetry.signal);
+    els.flightTrackingHud.dataset.signal = telemetry.signal.id;
+    const movement = item.motionState === "coasting" ? "dead-reckoned between reports" : item.motionState === "interpolated" ? "interpolated between reports" : telemetry.signal.label.toLowerCase();
+    els.flightTrackingStatus.textContent = tracker.polling
+      ? "Requesting a current targeted position..."
+      : tracker.misses
+        ? `${movement}; ${tracker.misses} targeted refresh ${tracker.misses === 1 ? "miss" : "misses"}. Retrying every 20 seconds.`
+        : `${movement}; targeted refresh every 20 seconds while this view is active.`;
+  }
+
+  function trackingSignalAge(signal) {
+    if (!Number.isFinite(signal.ageMs)) return signal.label;
+    const seconds = Math.max(0, Math.round(signal.ageMs / 1000));
+    const age = seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)}m`;
+    return signal.estimated ? `EST ${age}` : `LIVE ${age}`;
   }
 
   async function toggleDemoMode(open, options = {}) {
@@ -1967,7 +2412,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     try {
       const response = await fetch(`/api/intel-snapshot?scope=${encodeURIComponent(state.scope)}&ts=${Date.now()}`);
       if (!response.ok) throw new Error(`Snapshot failed with status ${response.status}`);
-      const nextSnapshot = await response.json();
+      const nextSnapshot = preserveTrackedFlightInSnapshot(await response.json());
       const previousAlertIds = state.seenAlertIds;
       state.snapshot = nextSnapshot;
       motionStore.ingest("flight", state.snapshot.flights, Date.now());
@@ -2016,6 +2461,25 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     }
     els.theaterSubtitle.textContent = subtitleForScope();
     if (globalThis.lucide) globalThis.lucide.createIcons();
+  }
+
+  function preserveTrackedFlightInSnapshot(snapshot) {
+    const tracker = state.flightTracking;
+    if (!tracker.active || !tracker.item || !Array.isArray(snapshot?.flights)) return snapshot;
+    const index = snapshot.flights.findIndex((flight) => flight.id === tracker.id);
+    if (index < 0) {
+      snapshot.flights.unshift(tracker.item);
+      return snapshot;
+    }
+
+    const aggregate = snapshot.flights[index];
+    const trackedAt = Date.parse(tracker.item.time || "") || 0;
+    const aggregateAt = Date.parse(aggregate.time || "") || 0;
+    tracker.item = aggregateAt > trackedAt
+      ? { ...tracker.item, ...aggregate }
+      : { ...aggregate, ...tracker.item };
+    snapshot.flights[index] = tracker.item;
+    return snapshot;
   }
 
   function updateTrackHistory(snapshot) {
@@ -2380,11 +2844,16 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       button.classList.toggle("active", button.dataset.earthView === viewId);
     });
     applyEarthView();
-    updateCesiumBaseLayer();
+    if (state.globeQuality === "photorealistic") {
+      useImageryCompatibleGlobe(`${EARTH_VIEWS.find((view) => view.id === viewId)?.label || "Selected"} imagery`).then(updateCesiumBaseLayer);
+    } else {
+      updateCesiumBaseLayer();
+    }
   }
 
   function setGlobeRenderer(rendererId) {
     const requested = rendererId === "cesium" ? "cesium" : "three";
+    if (requested !== "cesium" && state.flightTracking.active) stopFlightTracking("Aircraft tracking requires the Cesium globe and has been closed.");
     if (requested !== "cesium" && state.globeTrafficOverlay) {
       state.globeTrafficOverlay = false;
       els.toggleGlobeTraffic.classList.remove("active");
@@ -2551,7 +3020,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     cesiumGlobe.loading = true;
     const Cesium = globalThis.Cesium;
     try {
-      Cesium.Ion.defaultAccessToken = "";
+      await loadGlobeConfig();
+      Cesium.Ion.defaultAccessToken = state.globeConfig?.cesiumIonToken || "";
       const viewer = new Cesium.Viewer(els.cesiumGlobe, {
         animation: false,
         timeline: false,
@@ -2596,9 +3066,12 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       await viewer.dataSources.add(cesiumGlobe.incidentSource);
       cesiumGlobe.weatherGridSource = new Cesium.CustomDataSource("oversee-global-weather");
       await viewer.dataSources.add(cesiumGlobe.weatherGridSource);
+      cesiumGlobe.trackedAircraftSource = new Cesium.CustomDataSource("oversee-tracked-aircraft");
+      await viewer.dataSources.add(cesiumGlobe.trackedAircraftSource);
       cesiumGlobe.trafficLayer = new CesiumRoadTrafficLayer({ viewer, Cesium });
 
       await updateCesiumBaseLayer();
+      await applyCesiumGlobeQuality(state.globeQuality, { quiet: true });
       updateCesiumWeatherLayer();
       updateCesiumFloodLayer();
       updateCesiumTrafficLayer();
@@ -2642,6 +3115,149 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     } finally {
       cesiumGlobe.loading = false;
     }
+  }
+
+  async function setGlobeQuality(value) {
+    const requested = normalizeGlobeQuality(value);
+    const config = await loadGlobeConfig();
+    const resolved = resolveGlobeQuality(requested, config);
+    if (!resolved.available) {
+      const provider = requested === "buildings" ? "Cesium ion token" : "Google Photorealistic 3D Tiles key";
+      showStageNotice(`${provider} required. Opening Settings.`, "warning");
+      toggleSettingsDrawer(true);
+      els.settingsStatus.textContent = `Add a ${provider} and save it to enable ${globeQualityMode(requested).label}.`;
+      return;
+    }
+    if (state.globeRenderer !== "cesium") setGlobeRenderer("cesium");
+    await ensureCesiumGlobeReady();
+    if (!cesiumGlobe.ready) {
+      showStageNotice("The Cesium globe is not available right now.", "error");
+      return;
+    }
+    await applyCesiumGlobeQuality(requested);
+  }
+
+  async function applyCesiumGlobeQuality(value = state.globeQuality, options = {}) {
+    const viewer = cesiumGlobe.viewer;
+    const Cesium = globalThis.Cesium;
+    if (!viewer || !Cesium) return false;
+    const requested = normalizeGlobeQuality(value);
+    const resolved = resolveGlobeQuality(requested, state.globeConfig || {});
+    const mode = resolved.available ? requested : "standard";
+    const requestToken = ++cesiumGlobe.qualityRequestToken;
+    let disabledImageryLayers = [];
+    state.globeQualityLoading = true;
+    els.stage.classList.add("quality-loading");
+    renderGlobeQualityControls();
+
+    try {
+      removeCesiumQualityTilesets();
+      viewer.scene.globe.show = true;
+      viewer.scene.globe.depthTestAgainstTerrain = false;
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+
+      if (mode === "buildings") {
+        Cesium.Ion.defaultAccessToken = state.globeConfig.cesiumIonToken;
+        const terrainProvider = await Cesium.createWorldTerrainAsync({
+          requestVertexNormals: true,
+          requestWaterMask: true,
+        });
+        if (requestToken !== cesiumGlobe.qualityRequestToken) return false;
+        viewer.terrainProvider = terrainProvider;
+        viewer.scene.globe.depthTestAgainstTerrain = true;
+        const tileset = await Cesium.createOsmBuildingsAsync({
+          maximumScreenSpaceError: 24,
+          dynamicScreenSpaceError: true,
+        });
+        if (requestToken !== cesiumGlobe.qualityRequestToken) {
+          tileset.destroy?.();
+          return false;
+        }
+        cesiumGlobe.buildingsTileset = viewer.scene.primitives.add(tileset);
+      } else if (mode === "photorealistic") {
+        const url = `https://tile.googleapis.com/v1/3dtiles/root.json?key=${encodeURIComponent(state.globeConfig.googleMapsApiKey)}`;
+        const options3d = {
+          showCreditsOnScreen: true,
+          maximumScreenSpaceError: 20,
+          dynamicScreenSpaceError: true,
+          skipLevelOfDetail: true,
+        };
+        const tileset = Cesium.Cesium3DTileset.fromUrl
+          ? await Cesium.Cesium3DTileset.fromUrl(url, options3d)
+          : new Cesium.Cesium3DTileset({ url, ...options3d });
+        if (requestToken !== cesiumGlobe.qualityRequestToken) {
+          tileset.destroy?.();
+          return false;
+        }
+        cesiumGlobe.photorealisticTileset = viewer.scene.primitives.add(tileset);
+        disabledImageryLayers = disablePhotoIncompatibleOverlays();
+        viewer.scene.globe.show = false;
+      }
+
+      state.globeQuality = mode;
+      localStorage.setItem("oversee:globe-quality", mode);
+      els.stage.dataset.globeQuality = mode;
+      renderGlobeQualityControls();
+      viewer.scene.requestRender();
+      if (!options.quiet) {
+        const message = mode === "buildings"
+          ? "3D terrain and OpenStreetMap buildings enabled. Zoom into a city to explore."
+          : mode === "photorealistic"
+            ? `Google Photorealistic 3D Tiles enabled. Usage is billed to your Google project.${disabledImageryLayers.length ? ` ${disabledImageryLayers.join(" and ")} turned off because they require the imagery globe.` : ""}`
+            : "Standard keyless globe restored.";
+        showStageNotice(message);
+      }
+      return true;
+    } catch (error) {
+      console.warn(`${globeQualityMode(mode).label} globe unavailable`, error);
+      removeCesiumQualityTilesets();
+      viewer.scene.globe.show = true;
+      viewer.scene.globe.depthTestAgainstTerrain = false;
+      viewer.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+      state.globeQuality = "standard";
+      localStorage.setItem("oversee:globe-quality", "standard");
+      els.stage.dataset.globeQuality = "standard";
+      renderGlobeQualityControls();
+      viewer.scene.requestRender();
+      if (!options.quiet) showStageNotice(`${globeQualityMode(mode).label} could not load. Standard globe restored.`, "error", 6500);
+      return false;
+    } finally {
+      if (requestToken === cesiumGlobe.qualityRequestToken) {
+        state.globeQualityLoading = false;
+        els.stage.classList.remove("quality-loading");
+      }
+    }
+  }
+
+  function removeCesiumQualityTilesets() {
+    const primitives = cesiumGlobe.viewer?.scene?.primitives;
+    if (!primitives) return;
+    for (const key of ["buildingsTileset", "photorealisticTileset"]) {
+      const tileset = cesiumGlobe[key];
+      if (tileset && !tileset.isDestroyed?.()) primitives.remove(tileset);
+      cesiumGlobe[key] = null;
+    }
+  }
+
+  function disablePhotoIncompatibleOverlays() {
+    const viewer = cesiumGlobe.viewer;
+    const disabled = [];
+    if (state.globeWeatherOverlay) {
+      state.globeWeatherOverlay = false;
+      disabled.push("NOAA radar");
+      if (cesiumGlobe.weatherLayer) viewer?.imageryLayers.remove(cesiumGlobe.weatherLayer, false);
+      cesiumGlobe.weatherLayer = null;
+      updateWeatherMasterButton();
+    }
+    if (state.globeFloodOverlay) {
+      state.globeFloodOverlay = false;
+      disabled.push("FEMA flood mapping");
+      if (cesiumGlobe.floodLayer) viewer?.imageryLayers.remove(cesiumGlobe.floodLayer, false);
+      cesiumGlobe.floodLayer = null;
+      els.toggleGlobeFlood.classList.remove("active");
+      els.toggleGlobeFlood.setAttribute("aria-pressed", "false");
+    }
+    return disabled;
   }
 
   async function makeCesiumImageryProvider() {
@@ -2712,7 +3328,15 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       setGlobeRenderer("cesium");
     }
     await ensureCesiumGlobeReady();
+    if (state.globeWeatherOverlay) await useImageryCompatibleGlobe("NOAA radar");
     await updateCesiumWeatherLayer();
+  }
+
+  async function useImageryCompatibleGlobe(layerLabel) {
+    if (state.globeQuality !== "photorealistic") return false;
+    await applyCesiumGlobeQuality("standard", { quiet: true });
+    showStageNotice(`${layerLabel} uses the globe imagery surface, so Standard view was restored.`, "warning", 6000);
+    return true;
   }
 
   function toggleWeatherPalette(open) {
@@ -2818,6 +3442,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       setGlobeRenderer("cesium");
     }
     await ensureCesiumGlobeReady();
+    if (state.globeFloodOverlay) await useImageryCompatibleGlobe("FEMA flood mapping");
     await updateCesiumFloodLayer();
   }
 
@@ -3105,7 +3730,8 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     globe.animationId = requestAnimationFrame(animateGlobe);
     if (state.globeRenderer === "cesium") {
       cesiumGlobe.trafficLayer?.update(performance.now());
-      if (state.idleSpin && cesiumGlobe.ready && cesiumGlobe.viewer) {
+      if (state.flightTracking.active) updateCesiumTrackingFrame(performance.now());
+      if (state.idleSpin && !state.flightTracking.active && cesiumGlobe.ready && cesiumGlobe.viewer) {
         cesiumGlobe.viewer.camera.rotate(globalThis.Cesium.Cartesian3.UNIT_Z, -0.00018);
         cesiumGlobe.viewer.scene.requestRender();
       }
@@ -3139,6 +3765,102 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     }
     globe.controls?.update();
     globe.renderer.render(globe.scene, globe.camera);
+  }
+
+  function updateCesiumTrackingFrame(frameTime) {
+    const tracker = state.flightTracking;
+    const viewer = cesiumGlobe.viewer;
+    const Cesium = globalThis.Cesium;
+    if (!tracker.active || !tracker.item || !viewer || !Cesium) return;
+    const item = displayItemForGlobe("flight", tracker.item, Date.now());
+    const lat = Number(item.lat);
+    const lng = Number(item.lng);
+    const reportedHeading = Number(item.heading);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || !Number.isFinite(reportedHeading)) return;
+    tracker.smoothedHeading = tracker.smoothedHeading == null
+      ? reportedHeading
+      : smoothHeading(tracker.smoothedHeading, reportedHeading, tracker.mode === "cockpit" ? 0.08 : 0.14);
+    const profile = trackingCameraProfile(tracker.mode, item);
+    const targetAltitude = Math.max(item.onGround ? 25 : 80, Number(item.altitudeMeters || 0));
+    const cameraPoint = destinationPoint(lat, lng, tracker.smoothedHeading + 180, profile.distanceKm);
+    const desired = Cesium.Cartesian3.fromDegrees(
+      cameraPoint.lng,
+      cameraPoint.lat,
+      targetAltitude + profile.heightAboveMeters,
+    );
+    const deltaMs = tracker.lastFrameAt ? Math.min(80, Math.max(1, frameTime - tracker.lastFrameAt)) : 16;
+    tracker.lastFrameAt = frameTime;
+    const destination = new Cesium.Cartesian3();
+    if (!tracker.cameraPrimed) {
+      Cesium.Cartesian3.clone(desired, destination);
+      tracker.cameraPrimed = true;
+    } else {
+      const amount = 1 - Math.exp(-deltaMs / (tracker.mode === "follow" ? 520 : 280));
+      Cesium.Cartesian3.lerp(viewer.camera.positionWC, desired, amount, destination);
+    }
+    const target = tracker.mode === "cockpit"
+      ? destinationPoint(lat, lng, tracker.smoothedHeading, profile.lookAheadKm)
+      : { lat, lng };
+    const lookAltitude = tracker.mode === "cockpit"
+      ? targetAltitude + profile.heightAboveMeters
+        + Math.tan(Cesium.Math.toRadians(profile.pitchDegrees)) * (profile.lookAheadKm + profile.distanceKm) * 1000
+      : targetAltitude;
+    const lookPosition = Cesium.Cartesian3.fromDegrees(target.lng, target.lat, lookAltitude);
+    const direction = Cesium.Cartesian3.normalize(
+      Cesium.Cartesian3.subtract(lookPosition, destination, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3(),
+    );
+    const surfaceUp = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(destination, new Cesium.Cartesian3());
+    const right = Cesium.Cartesian3.normalize(
+      Cesium.Cartesian3.cross(direction, surfaceUp, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3(),
+    );
+    const up = Cesium.Cartesian3.normalize(
+      Cesium.Cartesian3.cross(right, direction, new Cesium.Cartesian3()),
+      new Cesium.Cartesian3(),
+    );
+    viewer.camera.setView({
+      destination,
+      orientation: { direction, up },
+    });
+    updateTrackedAircraftModel(item, tracker.smoothedHeading, targetAltitude);
+    viewer.scene.requestRender();
+  }
+
+  function ensureTrackedAircraftModel(item) {
+    const source = cesiumGlobe.trackedAircraftSource;
+    const Cesium = globalThis.Cesium;
+    if (!source || !Cesium || !item) return;
+    const kind = classifyAircraft(item).model;
+    if (cesiumGlobe.trackedModelEntity && cesiumGlobe.trackedModelKind === kind) return;
+    source.entities.removeAll();
+    cesiumGlobe.trackedModelKind = kind;
+    cesiumGlobe.trackedModelEntity = source.entities.add({
+      id: `tracked-model-${item.id || item.icao24}`,
+      position: Cesium.Cartesian3.fromDegrees(Number(item.lng), Number(item.lat), Math.max(80, Number(item.altitudeMeters || 0))),
+      model: {
+        uri: aircraftModelDataUri(kind),
+        scale: 1,
+        minimumPixelSize: kind === "helicopter" ? 38 : 34,
+        maximumScale: 200,
+        silhouetteColor: Cesium.Color.fromCssColorString(COLORS.flights).withAlpha(0.92),
+        silhouetteSize: 1.5,
+        show: state.flightTracking.mode !== "cockpit",
+      },
+    });
+  }
+
+  function updateTrackedAircraftModel(item, heading, altitude) {
+    const entity = cesiumGlobe.trackedModelEntity;
+    const Cesium = globalThis.Cesium;
+    if (!entity || !Cesium) return;
+    const position = Cesium.Cartesian3.fromDegrees(Number(item.lng), Number(item.lat), altitude);
+    entity.position = position;
+    entity.orientation = Cesium.Transforms.headingPitchRollQuaternion(
+      position,
+      new Cesium.HeadingPitchRoll(Cesium.Math.toRadians(heading), 0, 0),
+    );
+    entity.model.show = state.flightTracking.mode !== "cockpit";
   }
 
   function resizeGlobe() {
@@ -3451,6 +4173,10 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       if (state.layers.satellites) cesiumGlobe.pointLayers.satellites?.updateDynamic();
       if (state.layers.vessels) cesiumGlobe.pointLayers.vessels?.updateDynamic();
       const now = Date.now();
+      if (state.flightTracking.active && now - state.flightTracking.lastHudAt >= 1000) {
+        state.flightTracking.lastHudAt = now;
+        renderFlightTrackingHud();
+      }
       if (
         state.selection?.item
         && (state.selection.type === "flight" || state.selection.type === "satellite" || state.selection.type === "vessel")
@@ -3531,9 +4257,14 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       trail = [start, { lat: item.lat, lng: item.lng }];
     }
     if (trail.length < 2) return;
+    const height = type === "satellite"
+      ? cesiumHeightForType(type, item)
+      : type === "vessel"
+        ? 1400
+        : cesiumHeightForType("flight", item);
     source.entities.add({
       polyline: {
-        positions: cesiumPositions(trail, type === "satellite" ? cesiumHeightForType(type, item) : type === "vessel" ? 1400 : 18000),
+        positions: cesiumPositions(trail, height),
         width,
         material: color,
         arcType: globalThis.Cesium.ArcType.GEODESIC,
@@ -3552,24 +4283,27 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
     const color = cesiumColor(type === "alert" ? COLORS.alerts : colorForType(type), 0.94);
     const height = cesiumHeightForType(type, displayed);
-    cesiumGlobe.selectionSource.entities.add({
-      position: Cesium.Cartesian3.fromDegrees(lng, lat, height),
-      point: {
-        pixelSize: 18,
-        color,
-        outlineColor: Cesium.Color.WHITE.withAlpha(0.95),
-        outlineWidth: 3,
-        heightReference: Cesium.HeightReference.NONE,
-        scaleByDistance: new Cesium.NearFarScalar(900000, 1.15, 18000000, 0.68),
-      },
-    });
-    cesiumGlobe.selectionSource.entities.add({
-      polyline: {
-        positions: Cesium.Cartesian3.fromDegreesArrayHeights([lng, lat, 0, lng, lat, Math.max(height, 450000)]),
-        width: 2,
-        material: color.withAlpha(0.8),
-      },
-    });
+    const trackingThisFlight = type === "flight" && state.flightTracking.active && state.flightTracking.id === item.id;
+    if (!trackingThisFlight) {
+      cesiumGlobe.selectionSource.entities.add({
+        position: Cesium.Cartesian3.fromDegrees(lng, lat, height),
+        point: {
+          pixelSize: 18,
+          color,
+          outlineColor: Cesium.Color.WHITE.withAlpha(0.95),
+          outlineWidth: 3,
+          heightReference: Cesium.HeightReference.NONE,
+          scaleByDistance: new Cesium.NearFarScalar(900000, 1.15, 18000000, 0.68),
+        },
+      });
+      cesiumGlobe.selectionSource.entities.add({
+        polyline: {
+          positions: Cesium.Cartesian3.fromDegreesArrayHeights([lng, lat, 0, lng, lat, Math.max(height, 450000)]),
+          width: 2,
+          material: color.withAlpha(0.8),
+        },
+      });
+    }
     if (type === "satellite") {
       const orbit = satellitePropagator.groundTrack(item, new Date(), 120);
       if (orbit.length) {
@@ -4431,6 +5165,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   }
 
   async function selectObject(type, item, options = {}) {
+    if (state.flightTracking.active && (type !== "flight" || item.id !== state.flightTracking.id)) {
+      stopFlightTracking("Aircraft tracking ended because another signal was selected.");
+    }
     state.selection = { type, id: item.id, item };
     renderSelectedGlobeFocus(type, item);
     if (!options.silent && options.focus) focusGlobeOnItem(item, { pulse: type === "alert" || options.pulse });
@@ -4471,7 +5208,13 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       ? `<button class="text-button" style="color:var(--cyan)" type="button" data-nearest-camera data-nearest-type="${type}" data-nearest-id="${escapeHtml(item.id)}"><i data-lucide="cctv"></i>Nearest Camera</button>`
       : "";
     const briefAction = Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))
-      ? `<button class="text-button" style="color:var(--cyan)" type="button" data-area-brief data-brief-type="${type}" data-brief-id="${escapeHtml(item.id)}"><i data-lucide="scan-search"></i>Area Brief</button>`
+      ? `<button class="text-button" style="color:var(--cyan)" type="button" data-area-brief data-brief-type="${type}" data-brief-id="${escapeHtml(item.id)}"><i data-lucide="scan-search"></i>Incident View</button>`
+      : "";
+    const trackingActions = type === "flight"
+      ? AIRCRAFT_TRACKING_MODES.map((mode) => {
+          const active = state.flightTracking.active && state.flightTracking.id === item.id && state.flightTracking.mode === mode.id;
+          return `<button class="text-button ${active ? "active" : ""}" style="color:${color}" type="button" data-flight-track-mode="${mode.id}" data-flight-id="${escapeHtml(item.id)}"><i data-lucide="${mode.id === "cockpit" ? "scan-eye" : mode.id === "chase" ? "plane-takeoff" : "locate-fixed"}"></i>${mode.label}</button>`;
+        }).join("")
       : "";
     els.selectionCard.innerHTML = `<button class="selection-close" type="button" data-close-selection aria-label="Close selection card">
         <i data-lucide="x"></i>
@@ -4481,6 +5224,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       <div class="selection-actions">
         ${primaryAction}
         ${focusAction}
+        ${trackingActions}
         ${nearestCameraAction}
         ${briefAction}
         <button class="text-button" style="color:${pinned ? "var(--green)" : color}" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">
@@ -4504,6 +5248,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   }
 
   function clearSelectionCard() {
+    if (state.flightTracking.active) stopFlightTracking("", { quiet: true, restoreView: true });
     state.selection = null;
     state.feedView = null;
     els.selectionCard.classList.remove("visible", "pulse");
@@ -4536,7 +5281,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   function buildWatchActions(type, item) {
     const actions = [];
     actions.push(`<button class="text-button" type="button" data-select-type="${type}" data-select-id="${escapeHtml(item.id)}" data-focus="true">Center</button>`);
-    if (Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))) actions.push(`<button class="text-button" type="button" data-area-brief data-brief-type="${type}" data-brief-id="${escapeHtml(item.id)}">Area Brief</button>`);
+    if (Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))) actions.push(`<button class="text-button" type="button" data-area-brief data-brief-type="${type}" data-brief-id="${escapeHtml(item.id)}">Incident View</button>`);
     actions.push(`<button class="text-button" type="button" data-pin-asset="true" data-pin-type="${type}" data-pin-id="${escapeHtml(item.id)}">${isPinned(type, item.id) ? "Pinned" : "Pin"}</button>`);
     if (type === "camera") actions.push(`<button class="text-button" type="button" data-select-type="camera" data-select-id="${escapeHtml(item.id)}">Refresh</button>`);
     if (item.sourcePageUrl || item.sourceUrl || item.officialUrl || item.url) {
@@ -4806,6 +5551,19 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   function refreshSelectionReference() {
     if (!state.selection) return;
     const item = findItem(state.selection.type, state.selection.id);
+    if (state.flightTracking.active && state.selection.type === "flight" && state.selection.id === state.flightTracking.id && state.flightTracking.item) {
+      const trackedAt = Date.parse(state.flightTracking.item.time || "") || 0;
+      const snapshotAt = Date.parse(item?.time || "") || 0;
+      state.flightTracking.item = snapshotAt > trackedAt
+        ? { ...state.flightTracking.item, ...item }
+        : { ...(item || {}), ...state.flightTracking.item };
+      const snapshotIndex = state.snapshot?.flights?.findIndex((flight) => flight.id === state.flightTracking.id) ?? -1;
+      if (snapshotIndex >= 0) state.snapshot.flights[snapshotIndex] = state.flightTracking.item;
+      state.selection.item = state.flightTracking.item;
+      renderSelectionCard("flight", state.flightTracking.item);
+      renderWatch("flight", state.flightTracking.item);
+      return;
+    }
     if (item) {
       if (state.selection.type === "camera" && shouldHideUnavailableCamera(item)) {
         selectFirstAvailableCamera({ silent: true, autoAdvanceOnDown: true, excludeIds: new Set([item.id]) });
@@ -4995,6 +5753,9 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       item.shortName,
       item.title,
       item.callsign,
+      item.icao24,
+      item.registration,
+      item.aircraftType,
       item.id,
       item.area,
       item.region,
@@ -5021,6 +5782,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       item.missionType,
       item.language,
       item.codec,
+      type === "flight" ? classifyAircraft(item).label : "",
     ]
       .concat(Array.isArray(item.tags) ? item.tags : [])
       .filter(Boolean)
@@ -5201,14 +5963,20 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
       ];
     }
     if (type === "flight") {
+      const telemetry = trackingTelemetry(item);
       return [
         ["Callsign", item.callsign || "Unknown"],
         ["ICAO24", item.icao24 || item.id?.replace(/^flight-/, "") || "unknown"],
         ["Registration", item.registration || "unknown"],
         ["Aircraft", item.aircraftType || "unknown"],
+        ["Class", classifyAircraft(item).label],
         ["Altitude", item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "unknown"],
         ["Velocity", item.velocity ? `${Math.round(item.velocity)} m/s` : "unknown"],
         ["Heading", Number.isFinite(Number(item.heading)) ? `${Math.round(item.heading)} deg` : "unknown"],
+        ["Vertical rate", telemetry.verticalRateFeetPerMinute == null ? "unknown" : `${formatNumber(telemetry.verticalRateFeetPerMinute)} ft/min`],
+        ["Signal", trackingSignalAge(telemetry.signal)],
+        ["Movement", item.motionState || "reported"],
+        ["Squawk", item.squawk || "not reported"],
         ["Country", item.country || "unknown"],
         ["Position", formatLatLng(item.lat, item.lng)],
         ["Trail", getTrackPoints(type, item).length > 1 ? `${getTrackPoints(type, item).length} points` : "heading fallback"],
@@ -5311,7 +6079,7 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   function assetSubtitle(type, item) {
     if (type === "camera") return `${item.area || "Unknown"} | ${item.region || item.country || "Global"} | ${item.capabilityLabel || item.media || "Camera"}`;
     if (type === "satellite") return `${item.objectType || "Satellite"} | ${item.altitudeKm ? `${Math.round(item.altitudeKm)} km` : "orbit"} | ${item.source || "Public orbital data"}`;
-    if (type === "flight") return `${item.registration || item.country || "Unknown"} | ${item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "altitude unknown"} | ${item.source || "Aircraft feed"}`;
+    if (type === "flight") return `${classifyAircraft(item).label}${item.aircraftType ? ` ${item.aircraftType}` : ""} | ${item.registration || item.country || "Unknown"} | ${item.altitudeMeters ? `${Math.round(item.altitudeMeters)} m` : "altitude unknown"} | ${item.source || "Aircraft feed"}`;
     if (type === "quake") return `M${item.magnitude?.toFixed?.(1) || "?"} | ${item.location || "USGS event"}`;
     if (type === "fire" && (item.subtype === "incident" || item.subtype === "perimeter")) return `${item.subtype === "perimeter" ? "Perimeter" : "Incident"} | ${item.acres ? `${formatNumber(Math.round(item.acres))} acres` : item.gacc || "WildFireSA"} | ${item.source || "EGP"}`;
     if (type === "fire") return `${item.instrument || "VIIRS"} | FRP ${Math.round(item.frp || 0)} | ${item.confidence || "unknown"} confidence`;
@@ -5417,6 +6185,18 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
+  function showStageNotice(message, tone = "info", timeoutMs = 4200) {
+    if (!els.stageNotice) return;
+    if (state.stageNoticeTimer) window.clearTimeout(state.stageNoticeTimer);
+    els.stageNotice.textContent = message;
+    els.stageNotice.dataset.tone = tone;
+    els.stageNotice.classList.add("visible");
+    state.stageNoticeTimer = window.setTimeout(() => {
+      els.stageNotice.classList.remove("visible");
+      state.stageNoticeTimer = null;
+    }, timeoutMs);
+  }
+
   function destinationPoint(lat, lng, bearing, distanceKm) {
     const radiusKm = 6371;
     const angularDistance = distanceKm / radiusKm;
@@ -5486,6 +6266,10 @@ import { CesiumRoadTrafficLayer } from "../src/globe/cesium-traffic-layer.js";
   function loadGlobeRendererPreference() {
     const saved = localStorage.getItem("oversee:globe-renderer");
     return saved === "three" || saved === "cesium" ? saved : "cesium";
+  }
+
+  function loadGlobeQualityPreference() {
+    return normalizeGlobeQuality(localStorage.getItem("oversee:globe-quality"));
   }
 
   function shorten(value, max) {

@@ -11,7 +11,10 @@ const { satnogsRecordToGp } = require("./server-src/satellite-fallback.js");
 const { parseCensusPopulationCsv } = require("./server-src/census-population.js");
 const { RemoteMediaPolicy, isPublicIpAddress } = require("./server-src/remote-media-policy.js");
 const { CameraHealthRegistry, buildCameraCoverage } = require("./server-src/camera-health.js");
+const { buildCameraCoverageDiagnostics } = require("./server-src/camera-coverage.js");
 const { cameraMediaCandidates, cameraQualityScore, canonicalCameraMediaUrl, deduplicateCameras } = require("./server-src/camera-catalog.js");
+const { detectImageContentType, normalizeImageContentType } = require("./server-src/media-validation.js");
+const { normalizeTrackedFlightId, selectTrackedAircraft } = require("./server-src/flight-tracking.js");
 const {
   extractVancouverImageUrls,
   fetchBayernCameras,
@@ -23,7 +26,8 @@ const {
   fetchVancouverCameras,
 } = require("./server-src/camera-adapters.js");
 const { HistoryStore } = require("./server-src/history-store.js");
-const { buildUpdateStatus } = require("./server-src/versioning.js");
+const { parseGitHubLatestReleaseResponse } = require("./server-src/release-update.js");
+const { hasUsableGeoPosition, normalizeGeoPosition } = require("./server-src/geo.js");
 const {
   fetchAviationWeather,
   fetchGdacsEvents,
@@ -43,7 +47,7 @@ const {
 } = require("./server-src/road-traffic.js");
 
 const ROOT = __dirname;
-const APP_VERSION = "3.3.0";
+const APP_VERSION = "3.5.0";
 const BUILT_FRONTEND_ROOT = path.join(ROOT, "dist");
 const STATIC_ROOT = process.env.OVERSEE_STATIC_ROOT
   ? path.resolve(process.env.OVERSEE_STATIC_ROOT)
@@ -81,6 +85,7 @@ const SOURCE_URLS = {
   satnogsTle: "https://db.satnogs.org/api/tle/?format=json",
   openskyAll: "https://opensky-network.org/api/states/all",
   adsbLolPoint: "https://api.adsb.lol/v2/point",
+  adsbLolIcao: "https://api.adsb.lol/v2/icao",
   usgsQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson",
   usgsSignificantQuakes: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_month.geojson",
   nwsAlerts: "https://api.weather.gov/alerts/active",
@@ -158,6 +163,46 @@ const CASTLE_ROCK_CAMERA_SOURCES = [
     baseUrl: "https://newengland511.org",
     officialUrl: "https://newengland511.org/list/cameras",
     region: "New England",
+    country: "United States",
+  },
+  {
+    id: "nvroads-public",
+    name: "Nevada Roads Traffic Cameras",
+    baseUrl: "https://www.nvroads.com",
+    officialUrl: "https://www.nvroads.com/list/cameras",
+    region: "Nevada",
+    country: "United States",
+  },
+  {
+    id: "udot-public",
+    name: "Utah UDOT Traffic Cameras",
+    baseUrl: "https://www.udottraffic.utah.gov",
+    officialUrl: "https://www.udottraffic.utah.gov/list/cameras",
+    region: "Utah",
+    country: "United States",
+  },
+  {
+    id: "alaska511-public",
+    name: "Alaska 511 Traffic Cameras",
+    baseUrl: "https://511.alaska.gov",
+    officialUrl: "https://511.alaska.gov/list/cameras",
+    region: "Alaska",
+    country: "United States",
+  },
+  {
+    id: "wisconsin511-public",
+    name: "Wisconsin 511 Traffic Cameras",
+    baseUrl: "https://511wi.gov",
+    officialUrl: "https://511wi.gov/list/cameras",
+    region: "Wisconsin",
+    country: "United States",
+  },
+  {
+    id: "louisiana511-public",
+    name: "Louisiana 511 Traffic Cameras",
+    baseUrl: "https://www.511la.org",
+    officialUrl: "https://www.511la.org/list/cameras",
+    region: "Louisiana",
     country: "United States",
   },
   {
@@ -879,13 +924,14 @@ const server = http.createServer(async (request, response) => {
     if (requestUrl.pathname === "/api/update-status") {
       const result = await getCached("github:latest-release", 30 * 60 * 1000, fetchGithubReleaseOrTag, { staleTtlMs: 24 * 60 * 60 * 1000 });
       if (!result.ok) return sendJson(response, 200, { ok: false, currentVersion: APP_VERSION, updateAvailable: false, message: result.message || "Release information is unavailable" });
-      return sendJson(response, 200, { ...buildUpdateStatus(APP_VERSION, result.data), cached: Boolean(result.cached), stale: Boolean(result.stale) });
+      const updateStatus = parseGitHubLatestReleaseResponse(result.data, { currentVersion: APP_VERSION });
+      return sendJson(response, 200, { ...updateStatus, cached: Boolean(result.cached), stale: Boolean(result.stale) });
     }
 
     if (requestUrl.pathname === "/api/cameras") {
       const scope = normalizeScope(requestUrl.searchParams.get("scope"));
       const cameraSet = await buildCameraSet(scope);
-      return sendJson(response, 200, { generatedAt: new Date().toISOString(), scope, cameras: cameraSet.data, coverage: cameraSet.coverage, sourceHealth: cameraSet.health });
+      return sendJson(response, 200, { generatedAt: new Date().toISOString(), scope, cameras: cameraSet.data, coverage: cameraSet.coverage, diagnostics: cameraSet.diagnostics, sourceHealth: cameraSet.health });
     }
 
     if (requestUrl.pathname === "/api/custom-cameras") {
@@ -941,6 +987,27 @@ const server = http.createServer(async (request, response) => {
         return sendJson(response, 200, updateLocalSettings(payload));
       }
       return sendJson(response, 405, { error: "Method not allowed" });
+    }
+
+    if (requestUrl.pathname === "/api/globe-config") {
+      if (request.method !== "GET") return sendJson(response, 405, { error: "Method not allowed" });
+      if (!isLocalResourceRequest(request)) return sendJson(response, 403, { error: "Forbidden origin" });
+      return sendPrivateJson(response, 200, browserGlobeConfig());
+    }
+
+    if (requestUrl.pathname === "/api/flight-track") {
+      if (request.method !== "GET") return sendJson(response, 405, { error: "Method not allowed" });
+      if (!isLocalResourceRequest(request)) return sendJson(response, 403, { error: "Forbidden origin" });
+      const icao24 = normalizeTrackedFlightId(requestUrl.searchParams.get("id"));
+      if (!icao24) return sendJson(response, 400, { error: "A valid six-character ICAO aircraft id is required" });
+      const result = await getCached(`flight-track:${icao24}`, 12 * 1000, () => fetchTrackedFlight(icao24), { persist: false });
+      if (!result.ok) return sendJson(response, 503, { error: result.message || "Aircraft position is unavailable", flight: null });
+      return sendJson(response, 200, {
+        flight: result.data,
+        polledAt: new Date().toISOString(),
+        cached: result.cached,
+        refreshSeconds: 20,
+      });
     }
 
     if (requestUrl.pathname === "/api/intel-snapshot") {
@@ -1092,6 +1159,7 @@ async function buildIntelSnapshot(scope) {
     scope,
     cameraCatalogTotal: cameras.length,
     cameraCoverage: cameraSet.coverage,
+    cameraDiagnostics: cameraSet.diagnostics,
     cameras,
     satellites,
     flights,
@@ -1293,7 +1361,7 @@ async function buildCameraSet(scope = "world") {
   ];
 
   const scopedCameras = [...localCameras, ...externalCameras]
-    .filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng))
+    .filter(hasUsableGeoPosition)
     .filter((camera) => !bounds || bounds === SCOPE_BOUNDS.world || inBounds(camera, bounds));
   const deduplicated = deduplicateCameras(scopedCameras, {
     statusFor: (id) => cameraHealthRegistry.status(id),
@@ -1304,14 +1372,32 @@ async function buildCameraSet(scope = "world") {
 
   rememberDynamicCameras(cameras);
   rememberProxyImageHosts(cameras);
+  const generatedAt = new Date().toISOString();
   return {
     data: cameras,
     health: sourceHealth,
+    diagnostics: buildCameraCoverageDiagnostics(cameras, sourceHealth, {
+      generatedAt,
+      bounds: cameraCoverageBounds(scope),
+      cellDegrees: scope === "world" ? 10 : 5,
+      maxGaps: 20,
+      maxSourceEntries: 40,
+    }),
     coverage: {
       ...buildCameraCoverage(cameras),
       health: cameraHealthRegistry.summary(cameras),
       deduplication: deduplicated.stats,
     },
+  };
+}
+
+function cameraCoverageBounds(scope) {
+  const bounds = SCOPE_BOUNDS[scope] || SCOPE_BOUNDS.world;
+  return {
+    west: Number(bounds.lomin),
+    south: Number(bounds.lamin),
+    east: Number(bounds.lomax),
+    north: Number(bounds.lamax),
   };
 }
 
@@ -1456,7 +1542,7 @@ async function buildLocalCameras() {
     })
   );
   return [...cameras, ...CURATED_PUBLIC_CAMERAS.map(mapCuratedCamera), ...customCameraRecords()]
-    .filter((camera) => Number.isFinite(camera.lat) && Number.isFinite(camera.lng));
+    .filter(hasUsableGeoPosition);
 }
 
 async function buildDemoFeeds(scope = "world") {
@@ -3703,11 +3789,7 @@ async function readResponsePrefix(response, maxBytes) {
 }
 
 function hasImageSignature(buffer) {
-  if (buffer.length < 4) return false;
-  if (buffer[0] === 0xff && buffer[1] === 0xd8) return true;
-  if (buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return true;
-  if (/^GIF8[79]a/.test(buffer.toString("ascii", 0, 6))) return true;
-  return buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP";
+  return Boolean(detectImageContentType(buffer));
 }
 
 function mediaCheckResult(response, bytesChecked, latencyMs) {
@@ -3894,29 +3976,66 @@ async function fetchFlights(scope) {
   const states = Array.isArray(data.states) ? data.states : [];
   const maxStates = scope === "world" ? 5000 : scope === "us" ? 2200 : 900;
   return deterministicSample(states, maxStates, (state) => state[0])
-    .map((stateVector) => {
-      const lng = Number(stateVector[5]);
-      const lat = Number(stateVector[6]);
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-      const callsign = String(stateVector[1] || "").trim() || stateVector[0];
-      return {
-        id: `flight-${stateVector[0]}`,
-        icao24: stateVector[0],
-        type: "flight",
-        name: callsign,
-        callsign,
-        country: stateVector[2] || "Unknown",
-        lat,
-        lng,
-        altitudeMeters: Number(stateVector[13] || stateVector[7] || 0),
-        velocity: Number(stateVector[9] || 0),
-        heading: Number(stateVector[10] || 0),
-        onGround: Boolean(stateVector[8]),
-        time: stateVector[4] ? new Date(stateVector[4] * 1000).toISOString() : new Date().toISOString(),
-        source: "OpenSky",
-      };
-    })
+    .map(mapOpenSkyStateVector)
     .filter(Boolean);
+}
+
+async function fetchTrackedFlight(icao24) {
+  let adsbError;
+  try {
+    const data = await fetchJson(`${SOURCE_URLS.adsbLolIcao}/${icao24}`, {
+      timeoutMs: 9000,
+      headers: { Accept: "application/json" },
+    });
+    const aircraft = selectTrackedAircraft(data, icao24);
+    const flight = mapAdsbLolAircraft(aircraft);
+    if (flight) return flight;
+    adsbError = new Error("ADSB.lol did not report this aircraft");
+  } catch (error) {
+    adsbError = error;
+  }
+
+  try {
+    const url = new URL(SOURCE_URLS.openskyAll);
+    url.searchParams.set("icao24", icao24);
+    const headers = {};
+    const openskyToken = getConfiguredSecret("openskyToken", ["OPENSKY_TOKEN"]);
+    if (openskyToken) headers.Authorization = `Bearer ${openskyToken}`;
+    const data = await fetchJson(url.href, { headers, timeoutMs: 9000 });
+    const flight = (data.states || []).map(mapOpenSkyStateVector).find(Boolean);
+    if (flight) return flight;
+  } catch (error) {
+    throw new Error(`Tracked aircraft unavailable: ${adsbError?.message || "ADSB.lol unavailable"}; ${error.message}`);
+  }
+  throw new Error(`Tracked aircraft unavailable: ${adsbError?.message || "no current position"}`);
+}
+
+function mapOpenSkyStateVector(stateVector) {
+  if (!Array.isArray(stateVector)) return null;
+  const position = normalizeGeoPosition(stateVector[6], stateVector[5]);
+  const icao24 = normalizeTrackedFlightId(stateVector[0]);
+  if (!icao24 || !position) return null;
+  const { lat, lng } = position;
+  const callsign = String(stateVector[1] || "").trim() || icao24;
+  return {
+    id: `flight-${icao24}`,
+    icao24,
+    type: "flight",
+    name: callsign,
+    callsign,
+    country: stateVector[2] || "Unknown",
+    lat,
+    lng,
+    altitudeMeters: Number(stateVector[13] || stateVector[7] || 0),
+    velocity: Number(stateVector[9] || 0),
+    heading: Number(stateVector[10] || 0),
+    verticalRate: Number(stateVector[11] || 0),
+    squawk: cleanCameraText(stateVector[14] || ""),
+    category: cleanCameraText(stateVector[17] || ""),
+    onGround: Boolean(stateVector[8]),
+    time: stateVector[4] ? new Date(stateVector[4] * 1000).toISOString() : new Date().toISOString(),
+    source: "OpenSky",
+  };
 }
 
 async function fetchAdsbLolFlights(scope) {
@@ -3974,10 +4093,11 @@ function flightFallbackPoints(scope) {
 }
 
 function mapAdsbLolAircraft(aircraft) {
-  const lat = Number(aircraft.lat);
-  const lng = Number(aircraft.lon);
-  const icao24 = String(aircraft.hex || "").trim();
-  if (!icao24 || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (!aircraft) return null;
+  const position = normalizeGeoPosition(aircraft.lat, aircraft.lon);
+  const icao24 = normalizeTrackedFlightId(aircraft.hex);
+  if (!icao24 || !position) return null;
+  const { lat, lng } = position;
   const callsign = cleanCameraText(aircraft.flight || aircraft.r || icao24);
   const altitudeFeet = Number(aircraft.alt_geom || aircraft.alt_baro || 0);
   const altitudeMeters = Number.isFinite(altitudeFeet) ? altitudeFeet * 0.3048 : 0;
@@ -3990,12 +4110,17 @@ function mapAdsbLolAircraft(aircraft) {
     callsign,
     registration: cleanCameraText(aircraft.r || ""),
     aircraftType: cleanCameraText(aircraft.t || ""),
-    country: "ADS-B",
     lat,
     lng,
     altitudeMeters,
     velocity: Number.isFinite(groundspeedKnots) ? groundspeedKnots * 0.514444 : 0,
     heading: Number(aircraft.track ?? aircraft.true_heading ?? aircraft.mag_heading ?? 0),
+    verticalRate: Number.isFinite(Number(aircraft.baro_rate ?? aircraft.geom_rate))
+      ? Number(aircraft.baro_rate ?? aircraft.geom_rate) / 196.8504
+      : 0,
+    squawk: cleanCameraText(aircraft.squawk || ""),
+    category: cleanCameraText(aircraft.category || ""),
+    emergency: cleanCameraText(aircraft.emergency || ""),
     onGround: String(aircraft.alt_baro).toLowerCase() === "ground",
     time: new Date(Date.now() - Math.max(0, Number(aircraft.seen_pos || aircraft.seen || 0)) * 1000).toISOString(),
     source: "ADSB.lol",
@@ -4770,8 +4895,9 @@ function buildSeverity({ alerts, quakes, fires = [] }) {
 
 function filterGeoItems(items, bounds) {
   if (!items?.length) return [];
-  if (!bounds || bounds === SCOPE_BOUNDS.world) return items;
-  return items.filter((item) => inBounds(item, bounds));
+  const positioned = items.filter(hasUsableGeoPosition);
+  if (!bounds || bounds === SCOPE_BOUNDS.world) return positioned;
+  return positioned.filter((item) => inBounds(item, bounds));
 }
 
 function quakeSeverity(magnitude) {
@@ -4803,14 +4929,12 @@ function fireColor(frp, confidence) {
 }
 
 function inBounds(item, bounds) {
-  return (
-    Number.isFinite(Number(item.lat)) &&
-    Number.isFinite(Number(item.lng)) &&
-    item.lat >= bounds.lamin &&
-    item.lat <= bounds.lamax &&
-    item.lng >= bounds.lomin &&
-    item.lng <= bounds.lomax
-  );
+  const position = normalizeGeoPosition(item?.lat, item?.lng);
+  return Boolean(position
+    && position.lat >= bounds.lamin
+    && position.lat <= bounds.lamax
+    && position.lng >= bounds.lomin
+    && position.lng <= bounds.lomax);
 }
 
 function distanceBetweenLatLng(latA, lngA, latB, lngB) {
@@ -5336,12 +5460,13 @@ async function proxyImage(imageUrl, response) {
       timeoutMs: 8000,
     });
     if (!upstream.ok) throw new Error(`Image upstream returned ${upstream.status}`);
-    const contentType = upstream.headers.get("content-type") || "image/jpeg";
-    if (!/^image\//i.test(contentType)) throw new Error(`Image upstream returned ${contentType}`);
+    const declaredContentType = upstream.headers.get("content-type") || "";
     const contentLength = Number(upstream.headers.get("content-length") || 0);
     if (contentLength > 20 * 1024 * 1024) throw new Error("Image upstream exceeded the 20 MB safety limit");
     const buffer = Buffer.from(await upstream.arrayBuffer());
     if (buffer.length > 20 * 1024 * 1024) throw new Error("Image upstream exceeded the 20 MB safety limit");
+    const contentType = normalizeImageContentType(declaredContentType, buffer);
+    if (!contentType) throw new Error(`Image upstream returned ${declaredContentType || "unrecognized content"}`);
     response.writeHead(200, {
       "Content-Type": contentType,
       "Cache-Control": "no-cache",
@@ -5380,6 +5505,16 @@ function sendJson(response, status, payload) {
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-cache",
+  });
+  response.end(JSON.stringify(payload));
+}
+
+function sendPrivateJson(response, status, payload) {
+  response.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store, max-age=0",
+    Pragma: "no-cache",
+    "Referrer-Policy": "no-referrer",
   });
   response.end(JSON.stringify(payload));
 }
@@ -5440,18 +5575,38 @@ const USER_SETTING_FIELDS = [
     env: ["TOMTOM_TRAFFIC_API_KEY", "TOMTOM_API_KEY"],
     description: "Optional. Enables observed congestion colors; without it, Oversee clearly labels an OpenStreetMap time-of-day model.",
   },
-  { key: "googleMapsApiKey", label: "Google Maps / 3D Tiles key", env: ["GOOGLE_MAPS_API_KEY", "GOOGLE_EARTH_API_KEY"], visible: false },
+  {
+    key: "googleMapsApiKey",
+    label: "Google Photorealistic 3D Tiles key",
+    env: ["GOOGLE_MAPS_API_KEY", "GOOGLE_EARTH_API_KEY"],
+    description: "Optional and billing-enabled. Streams Google's photorealistic cities in Cesium. Google requires this browser-side key, so restrict it to the Map Tiles API and your allowed application origins.",
+  },
   { key: "flightradar24ApiKey", label: "Flightradar24 API key", env: ["FLIGHTRADAR24_API_KEY", "FR24_API_KEY"], visible: false },
-  { key: "cesiumIonToken", label: "Cesium ion token", env: ["CESIUM_ION_TOKEN"], visible: false },
+  {
+    key: "cesiumIonToken",
+    label: "Cesium ion access token",
+    env: ["CESIUM_ION_TOKEN"],
+    description: "Optional. Enables Cesium World Terrain and global OpenStreetMap 3D buildings. Restrict the token in Cesium ion before sharing the app.",
+  },
   {
     key: "openAqApiKey",
     label: "OpenAQ API key",
     env: ["OPENAQ_API_KEY"],
-    description: "Optional. Adds nearby public air-quality monitor readings to Area Briefs; no key value is sent to the browser.",
+    description: "Optional. Adds nearby public air-quality monitor readings to Incident View; no key value is sent to the browser.",
   },
   { key: "censusApiKey", label: "Census API key", env: ["CENSUS_API_KEY"] },
-  { key: "wisconsin511ApiKey", label: "Wisconsin 511 API key", env: ["WISCONSIN_511_API_KEY", "WI511_API_KEY"] },
-  { key: "louisiana511ApiKey", label: "Louisiana 511 API key", env: ["LOUISIANA_511_API_KEY", "LA511_API_KEY"] },
+  {
+    key: "wisconsin511ApiKey",
+    label: "Wisconsin 511 API key",
+    env: ["WISCONSIN_511_API_KEY", "WI511_API_KEY"],
+    description: "Optional supplement. Wisconsin's public no-key catalog is already enabled.",
+  },
+  {
+    key: "louisiana511ApiKey",
+    label: "Louisiana 511 API key",
+    env: ["LOUISIANA_511_API_KEY", "LA511_API_KEY"],
+    description: "Optional supplement. Louisiana's public no-key catalog is already enabled.",
+  },
   { key: "driveNcApiKey", label: "DriveNC API key", env: ["DRIVENC_API_KEY", "NC511_API_KEY"] },
   { key: "alberta511ApiKey", label: "Alberta 511 API key", env: ["ALBERTA_511_API_KEY", "AB511_API_KEY"] },
   { key: "nswTransportApiKey", label: "Transport for NSW API key", env: ["NSW_TRANSPORT_API_KEY", "TRANSPORT_NSW_API_KEY"] },
@@ -5556,6 +5711,19 @@ function publicSettings() {
       env: field.env.some((name) => Boolean(process.env[name])),
       description: field.description || "",
     })),
+  };
+}
+
+function browserGlobeConfig() {
+  const cesiumIonToken = getConfiguredSecret("cesiumIonToken", ["CESIUM_ION_TOKEN"]);
+  const googleMapsApiKey = getConfiguredSecret("googleMapsApiKey", ["GOOGLE_MAPS_API_KEY", "GOOGLE_EARTH_API_KEY"]);
+  return {
+    cesiumIonToken,
+    googleMapsApiKey,
+    capabilities: {
+      cesiumIon: Boolean(cesiumIonToken),
+      google3dTiles: Boolean(googleMapsApiKey),
+    },
   };
 }
 
